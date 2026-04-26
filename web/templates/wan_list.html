@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}WAN Interfaces - Awesome Router 2{% endblock %}
+
+{% block content %}
+<div class="fade-in">
+  <div class="flex items-center justify-between mb-6">
+    <h2 class="text-2xl font-bold text-white">WAN Interfaces</h2>
+    <a href="/wans/add" class="bg-accent hover:bg-accent/80 text-white text-sm px-4 py-2 rounded-lg transition">+ Add WAN</a>
+  </div>
+
+  <div class="space-y-3">
+    {% for wid, w in cfg.wans.items() %}
+    {% set iface = interfaces.get(w.interface) %}
+    <div class="bg-surface-light rounded-xl border border-gray-700/50 p-4 flex items-center justify-between hover:border-accent/30 transition">
+      <div class="flex items-center gap-4">
+        <div class="w-2.5 h-2.5 rounded-full {{ 'bg-emerald-400' if (iface and iface.is_up) else 'bg-red-400' }}"></div>
+        <div>
+          <a href="/wans/{{ wid }}" class="font-semibold text-white hover:text-accent-light transition">{{ w.name }}</a>
+          <div class="text-xs text-gray-500 mt-0.5">
+            {{ w.interface }} &middot; {{ w.type }} &middot; table {{ w.table_id }} &middot;
+            {% if w.nat_mode == 'onetoone' %}{{ w.pairs|length }} pair(s){% else %}{{ w.sources|length }} source(s){% endif %}
+          </div>
+        </div>
+      </div>
+      <div class="flex items-center gap-3">
+        {% if not w.enabled %}
+        <span class="text-xs px-2 py-0.5 rounded-full bg-gray-700 text-gray-400">disabled</span>
+        {% endif %}
+        <a href="/wans/{{ wid }}" class="text-sm text-gray-400 hover:text-white transition">View &rarr;</a>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
+  {% if unconfigured %}
+  <div class="mt-8">
+    <h3 class="text-lg font-semibold text-white mb-3">Unconfigured Interfaces</h3>
+    <div class="space-y-2">
+      {% for iface in unconfigured %}
+      <div class="bg-surface-light/60 rounded-lg border border-dashed border-gray-700/50 p-3 flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <div class="w-2 h-2 rounded-full {{ 'bg-yellow-400' if iface.is_up else 'bg-gray-500' }}"></div>
+          <span class="font-mono text-sm text-gray-300">{{ iface.name }}</span>
+          <span class="text-xs text-gray-500">{{ iface.mac }}</span>
+          {% if iface.addresses %}
+          <span class="text-xs text-gray-400">{{ iface.addresses[0].cidr }}</span>
+          {% endif %}
+        </div>
+        <a href="/wans/add?interface={{ iface.name }}" class="text-sm text-accent-light hover:text-white transition">Configure &rarr;</a>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

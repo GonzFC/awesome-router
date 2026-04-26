@@ -1,0 +1,15 @@
+[Unit]
+Description=Awesome Router 2 — WAN health monitor & failover
+After=network-online.target awesome-router-apply.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -m awesome_router.health_daemon
+Restart=always
+RestartSec=5
+Nice=10
+WorkingDirectory=/opt/awesome-router
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% block title %}{{ wan.name }} - Awesome Router 2{% endblock %}
+
+{% block content %}
+<div class="fade-in">
+  <div class="flex items-center justify-between mb-6">
+    <div>
+      <div class="flex items-center gap-3">
+        <div class="w-3 h-3 rounded-full {{ 'bg-emerald-400' if (iface and iface.is_up) else 'bg-red-400' }}"></div>
+        <h2 class="text-2xl font-bold text-white">{{ wan.name }}</h2>
+        <span class="text-xs px-2 py-0.5 rounded-full
+          {% if wan.nat_mode == 'onetoone' %}bg-blue-900/40 text-blue-300 border border-blue-700/40
+          {% else %}bg-purple-900/40 text-purple-300 border border-purple-700/40{% endif %}">
+          {{ wan.nat_mode }}
+        </span>
+        {% if not wan.enabled %}
+        <span class="text-xs px-2 py-0.5 rounded-full bg-gray-700 text-gray-400">disabled</span>
+        {% endif %}
+      </div>
+      <p class="text-sm text-gray-500 mt-1">{{ wan.interface }} &middot; {{ wan.type }} &middot; table {{ wan.table_id }}</p>
+    </div>
+    <div class="flex gap-2">
+      <a href="/system/apply" class="bg-emerald-600 hover:bg-emerald-500 text-white text-sm px-4 py-2 rounded-lg transition font-medium">Apply Changes</a>
+      <a href="/wans/{{ wan.id }}/edit" class="bg-surface-lighter hover:bg-gray-600 text-gray-200 text-sm px-4 py-2 rounded-lg transition">Edit</a>
+      <form method="post" action="/wans/{{ wan.id }}/delete" onsubmit="return confirm('Delete {{ wan.name }}? You will need to Apply after.')">
+        <button type="submit" class="bg-red-900/40 hover:bg-red-800/60 text-red-300 text-sm px-4 py-2 rounded-lg transition border border-red-700/40">Delete</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+    <!-- Config card -->
+    <div class="bg-surface-light rounded-xl border border-gray-700/50 p-5">
+      <h3 class="font-semibold text-white mb-3">Configuration</h3>
+      <div class="space-y-2 text-sm">
+        <div class="flex justify-between"><span class="text-gray-500">Interface</span><span class="text-gray-300 font-mono">{{ wan.interface }}</span></div>
+        <div class="flex justify-between"><span class="text-gray-500">Type</span><span class="text-gray-300">{{ wan.type }}</span></div>
+        <div class="flex justify-between"><span class="text-gray-500">Gateway</span><span class="text-gray-300 font-mono">{{ wan.gateway }}</span></div>
+        <div class="flex justify-between"><span class="text-gray-500">Routing Table</span><span class="text-gray-300">{{ wan.table_id }}</span></div>
+        <div class="flex justify-between"><span class="text-gray-500">NAT Mode</span><span class="text-gray-300">{{ wan.nat_mode }}</span></div>
+        {% if wan.type == 'dhcp' %}
+        <div class="flex justify-between"><span class="text-gray-500">Metric</span><span class="text-gray-300">{{ wan.metric }}</span></div>
+        {% endif %}
+        {% if wan.bandwidth.down_mbps %}
+        <div class="flex justify-between"><span class="text-gray-500">Bandwidth</span><span class="text-gray-300">{{ wan.bandwidth.down_mbps|int }} / {{ wan.bandwidth.up_mbps|int }} Mbps</span></div>
+        {% endif %}
+        {% if wan.router_ip %}
+        <div class="flex justify-between"><span class="text-gray-500">Router IP</span><span class="text-gray-300 font-mono">{{ wan.router_ip }}</span></div>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Live status card -->
+    <div class="bg-surface-light rounded-xl border border-gray-700/50 p-5">
+      <h3 class="font-semibold text-white mb-3">Live Status</h3>
+      {% if iface %}
+      <div class="space-y-2 text-sm">
+        <div class="flex justify-between"><span class="text-gray-500">State</span>
+          <span class="{{ 'text-emerald-400' if iface.is_up else 'text-red-400' }}">{{ iface.state }}</span>
+        </div>
+        <div class="flex justify-between"><span class="text-gray-500">MAC</span><span class="text-gray-300 font-mono text-xs">{{ iface.mac }}</span></div>
+        {% for addr in iface.addresses %}
+        <div class="flex justify-between">
+          <span class="text-gray-500">{{ 'Secondary IP' if addr.secondary else 'Primary IP' }}</span>
+          <span class="text-gray-300 font-mono text-xs">{{ addr.cidr }}</span>
+        </div>
+        {% endfor %}
+        <div class="flex justify-between">
+          <span class="text-gray-500">Public IP</span>
+          <span class="font-mono text-xs {{ 'text-emerald-300' if public_ip else 'text-gray-600' }}">{{ public_ip or '— checking —' }}</span>
+        </div>
+      </div>
+      {% if bandwidth %}
+      <div class="mt-3 pt-3 border-t border-gray-700/40 text-sm">
+        <div class="flex justify-between"><span class="text-gray-500">1h avg RX</span><span class="text-emerald-400">{{ "%.2f"|format(bandwidth.rx_bps / 1e6) }} Mb/s</span></div>
+        <div class="flex justify-between"><span class="text-gray-500">1h avg TX</span><span class="text-blue-400">{{ "%.2f"|format(bandwidth.tx_bps / 1e6) }} Mb/s</span></div>
+        <div class="flex justify-between"><span class="text-gray-500">1h total</span><span class="text-gray-300">{{ "%.1f"|format(bandwidth.rx_bytes / 1e9) }} GB rx / {{ "%.1f"|format(bandwidth.tx_bytes / 1e9) }} GB tx</span></div>
+      </div>
+      {% endif %}
+      {% else %}
+      <p class="text-gray-500 text-sm">Interface not found on system</p>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- IP Pairs / Sources -->
+  <div class="bg-surface-light rounded-xl border border-gray-700/50 p-5 mb-6">
+    <h3 class="font-semibold text-white mb-3">
+      {% if wan.nat_mode == 'onetoone' %}IP Pairs (1:1 NAT){% else %}Source IPs (Masquerade){% endif %}
+    </h3>
+
+    {% if wan.nat_mode == 'onetoone' %}
+    <div class="space-y-1.5">
+      {% for pair in wan.pairs %}
+      <div class="flex items-center justify-between bg-surface-lighter rounded-lg px-4 py-2">
+        <div class="flex items-center gap-4 text-sm font-mono">
+          <span class="text-blue-300">{{ pair.public }}</span>
+          <span class="text-gray-600">&harr;</span>
+          <span class="text-emerald-300">{{ pair.private }}</span>
+        </div>
+        <form method="post" action="/wans/{{ wan.id }}/pairs/{{ loop.index0 }}/delete" class="inline">
+          <button type="submit" class="text-xs text-red-400 hover:text-red-300 transition" onclick="return confirm('Remove this pair?')">remove</button>
+        </form>
+      </div>
+      {% endfor %}
+    </div>
+    <form method="post" action="/wans/{{ wan.id }}/pairs/add" class="mt-3 flex gap-2">
+      <input type="text" name="public" placeholder="Public IP" class="bg-surface text-gray-200 text-sm rounded-lg px-3 py-1.5 border border-gray-700 focus:border-accent outline-none flex-1 font-mono" required>
+      <input type="text" name="private" placeholder="Private IP" class="bg-surface text-gray-200 text-sm rounded-lg px-3 py-1.5 border border-gray-700 focus:border-accent outline-none flex-1 font-mono" required>
+      <button type="submit" class="bg-accent/80 hover:bg-accent text-white text-sm px-4 py-1.5 rounded-lg transition">Add Pair</button>
+    </form>
+
+    {% else %}
+    <div class="space-y-1.5">
+      {% for src in wan.sources %}
+      <div class="flex items-center justify-between bg-surface-lighter rounded-lg px-4 py-2">
+        <span class="text-sm font-mono text-emerald-300">{{ src }}</span>
+        <form method="post" action="/wans/{{ wan.id }}/pairs/{{ loop.index0 }}/delete" class="inline">
+          <button type="submit" class="text-xs text-red-400 hover:text-red-300 transition" onclick="return confirm('Remove this source?')">remove</button>
+        </form>
+      </div>
+      {% endfor %}
+    </div>
+    <form method="post" action="/wans/{{ wan.id }}/pairs/add" class="mt-3 flex gap-2">
+      <input type="text" name="source" placeholder="Private source IP (e.g. 10.188.147.122)" class="bg-surface text-gray-200 text-sm rounded-lg px-3 py-1.5 border border-gray-700 focus:border-accent outline-none flex-1 font-mono" required>
+      <button type="submit" class="bg-accent/80 hover:bg-accent text-white text-sm px-4 py-1.5 rounded-lg transition">Add Source</button>
+    </form>
+    {% endif %}
+  </div>
+
+  <!-- Routing table -->
+  <div class="bg-surface-light rounded-xl border border-gray-700/50 p-5">
+    <h3 class="font-semibold text-white mb-3">Routing Table {{ wan.table_id }}</h3>
+    {% if routes %}
+    <div class="font-mono text-xs text-gray-400 space-y-0.5">
+      {% for r in routes %}
+      <div>{{ r.raw }}</div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="text-sm text-gray-500">No routes in this table yet. Click Apply to populate.</p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

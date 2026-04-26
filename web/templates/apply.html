@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block title %}Apply Changes - Awesome Router 2{% endblock %}
+
+{% block content %}
+<div class="fade-in max-w-3xl">
+  <h2 class="text-2xl font-bold text-white mb-6">Apply Changes</h2>
+
+  {% if result.get('dry_run') %}
+  <!-- Plan preview -->
+  {% if result.changes %}
+  <div class="bg-surface-light rounded-xl border border-gray-700/50 p-5 mb-6">
+    <h3 class="font-semibold text-white mb-3">Planned Changes ({{ result.changes|length }})</h3>
+    <div class="space-y-2">
+      {% for c in result.changes %}
+      <div class="flex items-start gap-3 text-sm">
+        <span class="shrink-0 mt-0.5 px-2 py-0.5 rounded text-xs font-medium
+          {% if c.action == 'add' %}bg-emerald-900/40 text-emerald-300 border border-emerald-700/40
+          {% elif c.action == 'remove' %}bg-red-900/40 text-red-300 border border-red-700/40
+          {% elif c.action == 'replace' %}bg-yellow-900/40 text-yellow-300 border border-yellow-700/40
+          {% else %}bg-blue-900/40 text-blue-300 border border-blue-700/40{% endif %}">
+          {{ c.action }}
+        </span>
+        <span class="text-gray-300">{{ c.description }}</span>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <form method="post" action="/system/apply" class="flex gap-3">
+    <input type="hidden" name="action" value="apply">
+    <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 text-white text-sm px-6 py-2.5 rounded-lg transition font-medium"
+      onclick="return confirm('Apply {{ result.changes|length }} change(s) to the live router?')">
+      Apply Now
+    </button>
+    <a href="/" class="bg-surface-lighter hover:bg-gray-600 text-gray-300 text-sm px-6 py-2.5 rounded-lg transition">Cancel</a>
+  </form>
+
+  {% else %}
+  <div class="bg-surface-light rounded-xl border border-emerald-700/30 p-5">
+    <div class="flex items-center gap-3">
+      <div class="w-8 h-8 rounded-full bg-emerald-900/40 flex items-center justify-center">
+        <svg class="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+      </div>
+      <div>
+        <p class="text-white font-medium">No changes needed</p>
+        <p class="text-sm text-gray-500">The system state matches the configuration.</p>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {% elif confirmed %}
+  <!-- Apply result -->
+  {% if result.ok %}
+  <div class="bg-surface-light rounded-xl border border-emerald-700/30 p-5 mb-6">
+    <div class="flex items-center gap-3 mb-4">
+      <div class="w-8 h-8 rounded-full bg-emerald-900/40 flex items-center justify-center">
+        <svg class="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+      </div>
+      <p class="text-white font-medium">Applied successfully</p>
+    </div>
+    {% if result.changes %}
+    <div class="space-y-1.5 text-sm">
+      {% for c in result.changes %}
+      <div class="text-gray-400">
+        <span class="text-emerald-400">[{{ c.category }}]</span> {{ c.description }}
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% if result.snapshot %}
+    <p class="text-xs text-gray-500 mt-3">Snapshot: {{ result.snapshot }}</p>
+    {% endif %}
+  </div>
+  {% else %}
+  <div class="bg-surface-light rounded-xl border border-red-700/30 p-5 mb-6">
+    <div class="flex items-center gap-3 mb-3">
+      <div class="w-8 h-8 rounded-full bg-red-900/40 flex items-center justify-center">
+        <svg class="w-4 h-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </div>
+      <p class="text-white font-medium">Apply failed</p>
+    </div>
+    <p class="text-sm text-red-300">{{ result.get('error') or result.get('errors')|join('; ') }}</p>
+    {% if result.snapshot %}
+    <p class="text-xs text-gray-500 mt-2">Snapshot available at: {{ result.snapshot }}</p>
+    <a href="/system/rollback" class="inline-block mt-2 text-sm text-accent-light hover:text-white transition">Go to Rollback &rarr;</a>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <a href="/" class="bg-surface-lighter hover:bg-gray-600 text-gray-300 text-sm px-6 py-2.5 rounded-lg transition inline-block">Back to Dashboard</a>
+  {% endif %}
+</div>
+{% endblock %}

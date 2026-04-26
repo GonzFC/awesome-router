@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+
+# IDE / OS
+.DS_Store
+.vscode/
+.idea/
+.obsidian/
+.claude/
+*.swp
+*~
+
+# Local-only artifacts (these are data/state that doesn't belong in the repo)
+plans/
+*.bak-*
+.claude/
+
+# Plan files from local agent runs
+*.plan.md
+
+# Migration / dev notes that are session-local
+BOOT-SEQUENCE.md
+AWESOME-ROUTER-MANUAL.md
+
+# Old top-level service files now moved into installer/systemd/
+/awesome-router-apply.service
+/awesome-router-web.service
+/awesome-router-health.service
+/router-stats-sampler.py

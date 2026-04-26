@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% block title %}System - Awesome Router 2{% endblock %}
+
+{% block content %}
+<div class="fade-in">
+  <h2 class="text-2xl font-bold text-white mb-6">System Status</h2>
+
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+    <!-- System metrics -->
+    <div class="bg-surface-light rounded-xl border border-gray-700/50 p-5">
+      <h3 class="font-semibold text-white mb-3">Resources</h3>
+      <div class="space-y-3">
+        <div>
+          <div class="flex justify-between text-sm mb-1">
+            <span class="text-gray-400">CPU</span>
+            <span class="text-gray-300">{{ "%.1f"|format(metrics.cpu_percent) }}%</span>
+          </div>
+          <div class="h-2 bg-gray-700 rounded-full overflow-hidden">
+            <div class="h-full bg-accent rounded-full transition-all" style="width: {{ metrics.cpu_percent }}%"></div>
+          </div>
+        </div>
+        <div>
+          <div class="flex justify-between text-sm mb-1">
+            <span class="text-gray-400">Memory</span>
+            <span class="text-gray-300">{{ "%.1f"|format(metrics.mem_percent) }}% ({{ "%.0f"|format(metrics.mem_used / 1048576) }} / {{ "%.0f"|format(metrics.mem_total / 1048576) }} MB)</span>
+          </div>
+          <div class="h-2 bg-gray-700 rounded-full overflow-hidden">
+            <div class="h-full bg-blue-500 rounded-full" style="width: {{ metrics.mem_percent }}%"></div>
+          </div>
+        </div>
+        <div>
+          <div class="flex justify-between text-sm mb-1">
+            <span class="text-gray-400">Disk</span>
+            <span class="text-gray-300">{{ "%.1f"|format(metrics.disk_percent) }}%</span>
+          </div>
+          <div class="h-2 bg-gray-700 rounded-full overflow-hidden">
+            <div class="h-full bg-emerald-500 rounded-full" style="width: {{ metrics.disk_percent }}%"></div>
+          </div>
+        </div>
+        <div class="flex justify-between text-sm pt-1">
+          <span class="text-gray-400">Uptime</span>
+          <span class="text-gray-300">{{ "%.1f"|format(metrics.uptime_seconds / 3600) }} hours</span>
+        </div>
+        <div class="flex justify-between text-sm">
+          <span class="text-gray-400">Load</span>
+          <span class="text-gray-300 font-mono text-xs">{{ "%.2f"|format(metrics.load_1) }} {{ "%.2f"|format(metrics.load_5) }} {{ "%.2f"|format(metrics.load_15) }}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Services -->
+    <div class="bg-surface-light rounded-xl border border-gray-700/50 p-5">
+      <h3 class="font-semibold text-white mb-3">Services</h3>
+      <div class="space-y-2">
+        {% for name, svc in services.items() %}
+        <div class="flex items-center justify-between text-sm">
+          <div class="flex items-center gap-2">
+            <div class="w-2 h-2 rounded-full {{ 'bg-emerald-400' if svc.active else 'bg-gray-500' }}"></div>
+            <span class="text-gray-300 font-mono text-xs">{{ name }}</span>
+          </div>
+          <div class="flex items-center gap-3">
+            <span class="text-xs {{ 'text-emerald-400' if svc.active else 'text-gray-500' }}">{{ svc.status }}</span>
+            <span class="text-xs {{ 'text-blue-400' if svc.enabled else 'text-gray-600' }}">{{ 'enabled' if svc.enabled else 'disabled' }}</span>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <div class="flex flex-wrap gap-3 mb-6">
+    <a href="/system/apply" class="bg-accent hover:bg-accent/80 text-white text-sm px-5 py-2 rounded-lg transition">Apply Changes</a>
+    <a href="/system/rollback" class="bg-surface-lighter hover:bg-gray-600 text-gray-300 text-sm px-5 py-2 rounded-lg transition">Rollback</a>
+    <a href="/system/config" class="bg-surface-lighter hover:bg-gray-600 text-gray-300 text-sm px-5 py-2 rounded-lg transition">View Config</a>
+    <a href="/system/nftables" class="bg-surface-lighter hover:bg-gray-600 text-gray-300 text-sm px-5 py-2 rounded-lg transition">View Firewall</a>
+  </div>
+
+  <!-- Recovery actions -->
+  <div class="bg-surface-light rounded-xl border border-yellow-700/30 p-5">
+    <div class="flex items-start gap-3 mb-4">
+      <div class="w-8 h-8 rounded-lg bg-yellow-900/40 flex items-center justify-center shrink-0">
+        <svg class="w-4 h-4 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+        </svg>
+      </div>
+      <div class="flex-1">
+        <h3 class="font-semibold text-white mb-1">Recovery Actions</h3>
+        <p class="text-sm text-gray-400">Use these when routing or firewall state is stuck and an Apply doesn't fix it. A snapshot is taken before each action so you can rollback.</p>
+      </div>
+    </div>
+
+    <div class="grid md:grid-cols-2 gap-3">
+      <!-- Reset stack -->
+      <form method="post" action="/system/reset"
+        onsubmit="return confirm('Reset the network stack?\n\nThis will:\n• Flush custom ip rules\n• Flush custom routing tables\n• Flush nftables\n• Re-apply everything from config\n\nInterfaces are NOT touched. The web GUI stays up.\n\nA snapshot is taken for rollback.')">
+        <button type="submit" class="w-full text-left bg-surface-lighter hover:bg-yellow-900/30 border border-yellow-700/30 hover:border-yellow-600/50 rounded-lg p-4 transition">
+          <div class="flex items-center gap-2 mb-1">
+            <svg class="w-4 h-4 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+            </svg>
+            <span class="font-medium text-white text-sm">Reset Network Stack</span>
+          </div>
+          <p class="text-xs text-gray-400">Flush & re-apply routes, ip rules, and nftables. Safe and fast. Best first step if something is stuck.</p>
+        </button>
+      </form>
+
+      <!-- Restart networkd -->
+      <form method="post" action="/system/restart-networkd"
+        onsubmit="return confirm('Restart systemd-networkd?\n\nThis will:\n• Bounce ALL network interfaces briefly (~2-5s outage)\n• Trigger DHCP renewal on dynamic WANs\n• Auto re-run apply once network-online.target is back\n\nThe web GUI connection will be interrupted briefly.\n\nA snapshot is taken for rollback.')">
+        <button type="submit" class="w-full text-left bg-surface-lighter hover:bg-red-900/30 border border-red-700/30 hover:border-red-600/50 rounded-lg p-4 transition">
+          <div class="flex items-center gap-2 mb-1">
+            <svg class="w-4 h-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+            </svg>
+            <span class="font-medium text-white text-sm">Restart systemd-networkd</span>
+          </div>
+          <p class="text-xs text-gray-400">More aggressive. Bounces all interfaces and renews DHCP. Use only if Reset alone doesn't fix the issue.</p>
+        </button>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

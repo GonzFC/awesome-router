@@ -1,0 +1,13 @@
+[Unit]
+Description=Apply Awesome Router 2 policies (routes, rules, nftables)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -m awesome_router.apply_engine --config /etc/awesome-router.yaml
+RemainAfterExit=yes
+WorkingDirectory=/opt/awesome-router
+
+[Install]
+WantedBy=multi-user.target

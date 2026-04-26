@@ -1,0 +1,348 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - Awesome Router 2{% endblock %}
+
+{% block content %}
+<div class="fade-in">
+  <div class="flex items-center justify-between mb-6">
+    <div>
+      <h2 class="text-2xl font-bold text-white">Dashboard</h2>
+      <p class="text-sm text-gray-500 mt-0.5">{{ cfg.lan.interface }} &middot; {{ cfg.lan.address }}</p>
+    </div>
+    <div id="sys-stats" class="text-right text-xs text-gray-500">
+      <span>CPU {{ "%.1f"|format(metrics.cpu_percent) }}%</span>
+      <span class="ml-3">RAM {{ "%.1f"|format(metrics.mem_percent) }}%</span>
+      <span class="ml-3">Disk {{ "%.1f"|format(metrics.disk_percent) }}%</span>
+      <span class="ml-3">Up {{ "%.0f"|format(metrics.uptime_seconds / 3600) }}h</span>
+    </div>
+  </div>
+
+  <!-- WAN Cards -->
+  <div class="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4 mb-8">
+    {% for w in wans %}
+    <a href="/wans/{{ w.config.id }}" class="block bg-surface-light rounded-xl border {{ 'border-emerald-500/50' if w.is_active_failover else 'border-gray-700/50' }} p-5 hover:border-accent/40 transition group relative">
+      {% if w.is_active_failover %}
+      <span class="absolute top-2 right-2 text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-900/60 text-emerald-300 border border-emerald-700/50 font-semibold tracking-wider">ACTIVE FAILOVER</span>
+      {% endif %}
+      <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center gap-2.5">
+          <div class="w-2.5 h-2.5 rounded-full
+            {% if w.health %}{{ 'bg-emerald-400' if w.health.is_up else 'bg-red-400' }}
+            {% else %}{{ 'bg-emerald-400' if w.is_up else 'bg-red-400' }}{% endif %}"></div>
+          <h3 class="font-semibold text-white group-hover:text-accent-light transition">{{ w.config.name }}</h3>
+        </div>
+        <span class="text-xs px-2 py-0.5 rounded-full
+          {% if w.config.nat_mode == 'onetoone' %}bg-blue-900/40 text-blue-300 border border-blue-700/40
+          {% else %}bg-purple-900/40 text-purple-300 border border-purple-700/40{% endif %}">
+          {{ w.config.nat_mode }}
+        </span>
+      </div>
+
+      {% if w.health %}
+      <div class="flex items-center gap-2 mb-3 -mt-1">
+        {% for tname, ts in w.health.targets.items() %}
+        <span class="flex items-center gap-1" title="{{ tname }}{% if ts.last_rtt_ms %} · {{ '%.0f'|format(ts.last_rtt_ms) }}ms{% endif %}">
+          <span class="w-1.5 h-1.5 rounded-full {{ 'bg-emerald-400' if ts.up else 'bg-red-400' }}"></span>
+          <span class="text-[10px] text-gray-600 font-mono">{{ tname }}</span>
+        </span>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      <div class="space-y-1.5 text-sm">
+        <div class="flex justify-between">
+          <span class="text-gray-500">Interface</span>
+          <span class="text-gray-300 font-mono text-xs">{{ w.config.interface }}</span>
+        </div>
+        <div class="flex justify-between">
+          <span class="text-gray-500">Local IP</span>
+          <span class="text-gray-300 font-mono text-xs">{{ w.primary_ip or '—' }}</span>
+        </div>
+        <div class="flex justify-between">
+          <span class="text-gray-500">Public IP</span>
+          <span class="font-mono text-xs {{ 'text-emerald-300' if w.public_ip else 'text-gray-600' }}">{{ w.public_ip or '— checking —' }}</span>
+        </div>
+        <div class="flex justify-between">
+          <span class="text-gray-500">Gateway</span>
+          <span class="text-gray-300 font-mono text-xs">{{ w.gateway or 'auto' }}</span>
+        </div>
+        <div class="flex justify-between">
+          <span class="text-gray-500">Table</span>
+          <span class="text-gray-300 font-mono text-xs">{{ w.config.table_id }}</span>
+        </div>
+        <div class="flex justify-between">
+          <span class="text-gray-500">Mappings</span>
+          <span class="text-gray-300">
+            {% if w.config.nat_mode == 'onetoone' %}{{ w.config.pairs|length }} pair(s)
+            {% else %}{{ w.config.sources|length }} source(s){% endif %}
+          </span>
+        </div>
+      </div>
+
+      {% if w.bandwidth %}
+      <div class="mt-3 pt-3 border-t border-gray-700/40">
+        <div class="flex justify-between text-xs">
+          <span class="text-gray-500">1h avg</span>
+          <span class="text-emerald-400">&#8595; {{ "%.1f"|format(w.bandwidth.rx_bps / 1e6) }} Mb/s</span>
+          <span class="text-blue-400">&#8593; {{ "%.1f"|format(w.bandwidth.tx_bps / 1e6) }} Mb/s</span>
+        </div>
+        {% if w.config.bandwidth.down_mbps > 0 %}
+        <div class="mt-1.5 flex gap-2">
+          <div class="flex-1">
+            <div class="h-1.5 bg-gray-700 rounded-full overflow-hidden">
+              <div class="h-full bg-emerald-500 rounded-full" style="width: {{ [100, (w.bandwidth.rx_bps / 1e6 / w.config.bandwidth.down_mbps * 100)]|min }}%"></div>
+            </div>
+          </div>
+          <div class="flex-1">
+            <div class="h-1.5 bg-gray-700 rounded-full overflow-hidden">
+              <div class="h-full bg-blue-500 rounded-full" style="width: {{ [100, (w.bandwidth.tx_bps / 1e6 / w.config.bandwidth.up_mbps * 100)]|min }}%"></div>
+            </div>
+          </div>
+        </div>
+        {% endif %}
+      </div>
+      {% endif %}
+    </a>
+    {% endfor %}
+
+    <!-- Add WAN card -->
+    <a href="/wans/add" class="flex items-center justify-center bg-surface-light/50 rounded-xl border border-dashed border-gray-700/50 p-5 hover:border-accent/40 transition min-h-[180px] group">
+      <div class="text-center">
+        <div class="text-3xl text-gray-600 group-hover:text-accent-light transition mb-1">+</div>
+        <div class="text-sm text-gray-500 group-hover:text-gray-300 transition">Add WAN Interface</div>
+      </div>
+    </a>
+  </div>
+
+  <!-- Bandwidth Graphs -->
+  <div class="bg-surface-light rounded-xl border border-gray-700/50 p-5 mb-6">
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="font-semibold text-white">Bandwidth Usage</h3>
+      <div class="flex gap-1 bg-surface rounded-lg p-0.5">
+        <button onclick="loadCharts('24h')" id="btn-24h" class="chart-tab text-xs px-3 py-1 rounded-md transition bg-accent/20 text-accent-light">24h</button>
+        <button onclick="loadCharts('7d')" id="btn-7d" class="chart-tab text-xs px-3 py-1 rounded-md transition text-gray-500 hover:text-gray-300">7d</button>
+        <button onclick="loadCharts('30d')" id="btn-30d" class="chart-tab text-xs px-3 py-1 rounded-md transition text-gray-500 hover:text-gray-300">30d</button>
+      </div>
+    </div>
+    <div id="charts-container" class="space-y-6">
+      <div class="text-center text-gray-500 text-sm py-8">Loading charts...</div>
+    </div>
+  </div>
+
+  <!-- Routing Rules -->
+  <div class="bg-surface-light rounded-xl border border-gray-700/50 p-5">
+    <h3 class="font-semibold text-white mb-3">Active IP Rules</h3>
+    <div class="font-mono text-xs text-gray-400 space-y-0.5">
+      {% for r in rules %}
+      <div class="{% if r.priority == 100 %}text-gray-300{% endif %}">{{ r.raw }}</div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script>
+
+const WAN_COLORS = [
+  { rx: '#34d399', tx: '#60a5fa', rxBg: 'rgba(52,211,153,0.15)', txBg: 'rgba(96,165,250,0.15)' },
+  { rx: '#fbbf24', tx: '#f87171', rxBg: 'rgba(251,191,36,0.15)', txBg: 'rgba(248,113,113,0.15)' },
+  { rx: '#a78bfa', tx: '#f472b6', rxBg: 'rgba(167,139,250,0.15)', txBg: 'rgba(244,114,182,0.15)' },
+  { rx: '#2dd4bf', tx: '#fb923c', rxBg: 'rgba(45,212,191,0.15)', txBg: 'rgba(251,146,60,0.15)' },
+];
+
+let charts = {};
+let currentWindow = '24h';
+
+function formatBps(bps) {
+  if (bps >= 1e9) return (bps / 1e9).toFixed(1) + ' Gb/s';
+  if (bps >= 1e6) return (bps / 1e6).toFixed(1) + ' Mb/s';
+  if (bps >= 1e3) return (bps / 1e3).toFixed(0) + ' Kb/s';
+  return bps.toFixed(0) + ' b/s';
+}
+
+function formatBytes(bytes) {
+  if (bytes >= 1e12) return (bytes / 1e12).toFixed(1) + ' TB';
+  if (bytes >= 1e9) return (bytes / 1e9).toFixed(1) + ' GB';
+  if (bytes >= 1e6) return (bytes / 1e6).toFixed(1) + ' MB';
+  return (bytes / 1e3).toFixed(0) + ' KB';
+}
+
+async function loadCharts(window) {
+  currentWindow = window;
+
+  // Update tab buttons
+  document.querySelectorAll('.chart-tab').forEach(b => {
+    b.className = 'chart-tab text-xs px-3 py-1 rounded-md transition text-gray-500 hover:text-gray-300';
+  });
+  document.getElementById('btn-' + window).className = 'chart-tab text-xs px-3 py-1 rounded-md transition bg-accent/20 text-accent-light';
+
+  const container = document.getElementById('charts-container');
+  container.innerHTML = '<div class="text-center text-gray-500 text-sm py-8">Loading...</div>';
+
+  try {
+    const resp = await fetch(`/api/bandwidth-all?window=${window}`);
+    if (!resp.ok) throw new Error('API error');
+    const data = await resp.json();
+
+    // Destroy existing charts
+    Object.values(charts).forEach(c => c.destroy());
+    charts = {};
+
+    const wanIds = Object.keys(data.wans);
+    if (wanIds.length === 0) {
+      container.innerHTML = '<div class="text-center text-gray-500 text-sm py-8">No WAN data available</div>';
+      return;
+    }
+
+    container.innerHTML = '';
+
+    wanIds.forEach((wanId, idx) => {
+      const wan = data.wans[wanId];
+      const colors = WAN_COLORS[idx % WAN_COLORS.length];
+      const series = wan.series || [];
+
+      // Calculate totals for the period
+      const bucketSecs = data.bucket_seconds;
+      let totalRxBits = 0, totalTxBits = 0;
+      series.forEach(s => { totalRxBits += s.rx * bucketSecs; totalTxBits += s.tx * bucketSecs; });
+      const totalRxBytes = totalRxBits / 8;
+      const totalTxBytes = totalTxBits / 8;
+
+      // Peak rate
+      let peakRx = 0, peakTx = 0;
+      series.forEach(s => { if (s.rx > peakRx) peakRx = s.rx; if (s.tx > peakTx) peakTx = s.tx; });
+
+      const wrapper = document.createElement('div');
+      wrapper.innerHTML = `
+        <div class="flex items-center justify-between mb-2">
+          <div class="flex items-center gap-2">
+            <h4 class="text-sm font-medium text-white">${wan.name}</h4>
+            <span class="text-xs text-gray-500">${wan.interface}</span>
+            ${wan.capacity_down_mbps ? `<span class="text-xs text-gray-600">${wan.capacity_down_mbps}/${wan.capacity_up_mbps} Mbps</span>` : ''}
+          </div>
+          <div class="text-xs text-gray-500 space-x-3">
+            <span>Total: <span class="text-emerald-400">${formatBytes(totalRxBytes)} &#8595;</span> <span class="text-blue-400">${formatBytes(totalTxBytes)} &#8593;</span></span>
+            <span>Peak: <span class="text-emerald-400">${formatBps(peakRx)} &#8595;</span> <span class="text-blue-400">${formatBps(peakTx)} &#8593;</span></span>
+          </div>
+        </div>
+        <div style="height: 180px; position: relative;">
+          <canvas id="chart-${wanId}"></canvas>
+        </div>
+      `;
+      container.appendChild(wrapper);
+
+      const ctx = document.getElementById(`chart-${wanId}`).getContext('2d');
+      const labels = series.map(s => new Date(s.t * 1000));
+      const rxData = series.map(s => s.rx / 1e6);  // Mb/s
+      const txData = series.map(s => s.tx / 1e6);
+
+      charts[wanId] = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [
+            {
+              label: 'Download',
+              data: rxData,
+              borderColor: colors.rx,
+              backgroundColor: colors.rxBg,
+              fill: true,
+              tension: 0.3,
+              borderWidth: 1.5,
+              pointRadius: 0,
+              pointHitRadius: 8,
+            },
+            {
+              label: 'Upload',
+              data: txData,
+              borderColor: colors.tx,
+              backgroundColor: colors.txBg,
+              fill: true,
+              tension: 0.3,
+              borderWidth: 1.5,
+              pointRadius: 0,
+              pointHitRadius: 8,
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { mode: 'index', intersect: false },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              backgroundColor: '#1e1e2e',
+              borderColor: '#374151',
+              borderWidth: 1,
+              titleColor: '#e5e7eb',
+              bodyColor: '#9ca3af',
+              callbacks: {
+                label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)} Mb/s`
+              }
+            }
+          },
+          scales: {
+            x: {
+              type: 'time',
+              time: {
+                tooltipFormat: window === '24h' ? 'HH:mm' : 'MMM d HH:mm',
+                displayFormats: {
+                  minute: 'HH:mm',
+                  hour: 'HH:mm',
+                  day: 'MMM d',
+                }
+              },
+              grid: { color: 'rgba(75,85,99,0.2)' },
+              ticks: { color: '#6b7280', maxTicksLimit: 12, font: { size: 10 } },
+              border: { color: 'rgba(75,85,99,0.3)' },
+            },
+            y: {
+              beginAtZero: true,
+              grid: { color: 'rgba(75,85,99,0.2)' },
+              ticks: {
+                color: '#6b7280',
+                font: { size: 10 },
+                callback: (v) => v.toFixed(0) + ' Mb/s'
+              },
+              border: { color: 'rgba(75,85,99,0.3)' },
+            }
+          }
+        }
+      });
+    });
+
+  } catch (e) {
+    container.innerHTML = `<div class="text-center text-red-400 text-sm py-8">Failed to load charts: ${e.message}</div>`;
+  }
+}
+
+// Load 24h charts on page load
+loadCharts('24h');
+
+// Auto-refresh system stats
+setInterval(async () => {
+  try {
+    const resp = await fetch('/api/status');
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const el = document.getElementById('sys-stats');
+    if (el && data.system) {
+      el.innerHTML = `
+        <span>CPU ${data.system.cpu}%</span>
+        <span class="ml-3">RAM ${data.system.mem_percent}%</span>
+        <span class="ml-3">Disk ${data.system.disk_percent}%</span>
+        <span class="ml-3">Up ${data.system.uptime_hours}h</span>
+      `;
+    }
+  } catch(e) {}
+}, 10000);
+
+// Auto-refresh charts every 60 seconds
+setInterval(() => loadCharts(currentWindow), 60000);
+
+</script>
+{% endblock %}

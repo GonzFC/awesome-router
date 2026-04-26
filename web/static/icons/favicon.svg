@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Rounded dark background -->
+  <rect width="64" height="64" rx="14" ry="14" fill="#1e1e2e"/>
+
+  <!-- Outer soft glow (pulse ring) -->
+  <circle cx="32" cy="32" r="11" fill="none" stroke="#7c3aed" stroke-width="1" opacity="0.35"/>
+
+  <!-- Three WAN uplinks converging (right side) -->
+  <line x1="32" y1="32" x2="54" y2="12" stroke="#a78bfa" stroke-width="3" stroke-linecap="round"/>
+  <line x1="32" y1="32" x2="58" y2="32" stroke="#a78bfa" stroke-width="3" stroke-linecap="round"/>
+  <line x1="32" y1="32" x2="54" y2="52" stroke="#a78bfa" stroke-width="3" stroke-linecap="round"/>
+
+  <!-- LAN downlink to UDM (left side) -->
+  <line x1="32" y1="32" x2="8" y2="32" stroke="#34d399" stroke-width="3" stroke-linecap="round"/>
+
+  <!-- WAN endpoint dots -->
+  <circle cx="54" cy="12" r="3.5" fill="#a78bfa"/>
+  <circle cx="58" cy="32" r="3.5" fill="#a78bfa"/>
+  <circle cx="54" cy="52" r="3.5" fill="#a78bfa"/>
+
+  <!-- LAN endpoint -->
+  <circle cx="8" cy="32" r="3.5" fill="#34d399"/>
+
+  <!-- Router core -->
+  <circle cx="32" cy="32" r="7" fill="#7c3aed"/>
+  <circle cx="32" cy="32" r="2.5" fill="#ffffff"/>
+</svg>

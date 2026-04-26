@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Firewall - Awesome Router 2{% endblock %}
+
+{% block content %}
+<div class="fade-in">
+  <h2 class="text-2xl font-bold text-white mb-6">Active Firewall Rules</h2>
+  <div class="bg-surface-light rounded-xl border border-gray-700/50 p-5">
+    <p class="text-xs text-gray-500 mb-3">nft list ruleset</p>
+    <pre class="text-sm text-gray-300 font-mono whitespace-pre overflow-x-auto">{{ content }}</pre>
+  </div>
+</div>
+{% endblock %}

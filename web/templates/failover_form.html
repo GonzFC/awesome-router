@@ -1,0 +1,316 @@
+{% extends "base.html" %}
+{% block title %}Configure Failover - Awesome Router 2{% endblock %}
+
+{% block content %}
+<div class="fade-in max-w-3xl">
+  <h2 class="text-2xl font-bold text-white mb-1">Configure Failover</h2>
+  <p class="text-sm text-gray-500 mb-6">
+    Keep one private IP always reachable from the internet by automatically routing it through the healthiest WAN in priority order.
+  </p>
+
+  <form method="post" action="/failover/edit" class="space-y-6">
+
+    <!-- Enable + basics -->
+    <div class="bg-surface-light rounded-xl border border-gray-700/50 p-5 space-y-5">
+      <div>
+        <label class="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+          <input type="checkbox" name="enabled" {{ 'checked' if cfg.failover.enabled }}
+            class="rounded border-gray-600 bg-surface text-accent focus:ring-accent">
+          <span class="font-semibold text-white">Enable automatic failover</span>
+        </label>
+        <p class="text-xs text-gray-500 mt-1 ml-6">When disabled, health checks still run and are visible, but no routing changes are made.</p>
+      </div>
+
+      <div class="grid grid-cols-2 gap-4">
+        <div>
+          <label class="block text-sm text-gray-400 mb-1.5">Failover IP <span class="text-gray-600">(private IP the UDM uses)</span></label>
+          <input type="text" name="failover_ip" value="{{ cfg.failover.failover_ip }}" placeholder="10.188.147.120"
+            class="w-full bg-surface text-gray-200 text-sm rounded-lg px-3 py-2 border border-gray-700 focus:border-accent outline-none font-mono">
+        </div>
+        <div>
+          <label class="block text-sm text-gray-400 mb-1.5">Routing Table ID</label>
+          <input type="number" name="table_id" value="{{ cfg.failover.table_id }}" min="1" max="65535"
+            class="w-full bg-surface text-gray-200 text-sm rounded-lg px-3 py-2 border border-gray-700 focus:border-accent outline-none">
+        </div>
+      </div>
+    </div>
+
+    <!-- Priority order -->
+    <div class="bg-surface-light rounded-xl border border-gray-700/50 p-5">
+      <h3 class="font-semibold text-white mb-1">WAN Priority</h3>
+      <p class="text-xs text-gray-500 mb-3">Drag to reorder. The first healthy WAN in this list serves the failover IP.</p>
+
+      <ul id="priority-list" class="space-y-2">
+        {% set in_priority = cfg.failover.priority %}
+        {# render WANs in current priority order first, then any missing ones #}
+        {% for wan_id in in_priority %}
+        {% set wan = cfg.get_wan(wan_id) %}
+        {% if wan %}
+        <li data-wan-id="{{ wan_id }}" draggable="true"
+          class="priority-item flex items-center gap-3 bg-surface-lighter rounded-lg p-3 border border-transparent hover:border-accent/30 transition">
+          <span class="drag-handle cursor-move text-gray-600 select-none px-1" title="Drag to reorder">⋮⋮</span>
+          <span class="rank-badge text-xs font-bold text-gray-500 w-6 text-center"></span>
+          <span class="font-semibold text-white flex-1">{{ wan.name }}</span>
+          <span class="text-xs text-gray-500 font-mono">{{ wan.interface }}</span>
+          <span class="text-xs px-2 py-0.5 rounded-full {{ 'bg-blue-900/40 text-blue-300 border border-blue-700/40' if wan.nat_mode == 'onetoone' else 'bg-purple-900/40 text-purple-300 border border-purple-700/40' }}">{{ wan.nat_mode }}</span>
+          <div class="flex gap-1 ml-2">
+            <button type="button" class="move-up w-7 h-7 rounded bg-surface hover:bg-accent/30 text-gray-400 hover:text-white transition flex items-center justify-center" title="Move up">↑</button>
+            <button type="button" class="move-down w-7 h-7 rounded bg-surface hover:bg-accent/30 text-gray-400 hover:text-white transition flex items-center justify-center" title="Move down">↓</button>
+            <button type="button" class="remove-from-priority w-7 h-7 rounded bg-surface hover:bg-red-900/40 text-gray-400 hover:text-red-300 transition flex items-center justify-center" title="Remove from priority">×</button>
+          </div>
+        </li>
+        {% endif %}
+        {% endfor %}
+        {% for wan_id, wan in cfg.wans.items() %}
+        {% if wan_id not in in_priority %}
+        <li data-wan-id="{{ wan_id }}" draggable="true"
+          class="priority-item flex items-center gap-3 bg-surface-lighter/40 rounded-lg p-3 border border-transparent hover:border-accent/30 opacity-60 transition">
+          <span class="drag-handle cursor-move text-gray-600 select-none px-1">⋮⋮</span>
+          <span class="rank-badge text-xs font-bold text-gray-600 w-6 text-center">–</span>
+          <span class="font-semibold text-gray-400 flex-1">{{ wan.name }}</span>
+          <span class="text-xs text-gray-500 font-mono">{{ wan.interface }}</span>
+          <span class="text-xs text-gray-600 italic">not in priority</span>
+          <div class="flex gap-1 ml-2">
+            <button type="button" class="add-to-priority text-xs px-2 py-1 rounded bg-accent/30 hover:bg-accent/50 text-accent-light transition" title="Add to priority list">+ Add</button>
+          </div>
+        </li>
+        {% endif %}
+        {% endfor %}
+      </ul>
+      <input type="hidden" name="priority" id="priority-field" value="{{ cfg.failover.priority|join(',') }}">
+    </div>
+
+    <!-- Per-WAN SNAT -->
+    <div class="bg-surface-light rounded-xl border border-gray-700/50 p-5">
+      <h3 class="font-semibold text-white mb-1">Per-WAN Egress Source IP</h3>
+      <p class="text-xs text-gray-500 mb-4">
+        For static WANs, choose which public IP to SNAT the failover traffic through. Leave empty for automatic selection (masquerade uses the interface primary IP).
+      </p>
+
+      <div class="space-y-3">
+        {% for wan_id, wan in cfg.wans.items() %}
+        <div class="flex items-center gap-4">
+          <div class="w-32 text-sm text-gray-300 font-medium">{{ wan.name }}</div>
+          <div class="text-xs text-gray-500 w-20 font-mono">{{ wan.interface }}</div>
+          {% if wan.type == 'static' %}
+          <select name="snat_{{ wan_id }}" class="flex-1 bg-surface text-gray-200 text-sm rounded-lg px-3 py-2 border border-gray-700 focus:border-accent outline-none font-mono">
+            <option value="" {{ 'selected' if not wan.failover_snat_ip }}>— masquerade (auto) —</option>
+            {% for addr in wan.addresses %}
+            {% set ip = addr.split('/')[0] %}
+            <option value="{{ ip }}" {{ 'selected' if wan.failover_snat_ip == ip }}>{{ ip }}</option>
+            {% endfor %}
+          </select>
+          {% else %}
+          <div class="flex-1 text-xs text-gray-500">DHCP — always masquerade (uses leased IP)</div>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <!-- Health check settings -->
+    <div class="bg-surface-light rounded-xl border border-gray-700/50 p-5">
+      <h3 class="font-semibold text-white mb-1">Health Checks</h3>
+      <p class="text-xs text-gray-500 mb-4">Targets are pinged through each WAN's interface at the specified interval. A WAN is considered healthy if at least half the targets respond.</p>
+
+      <div class="space-y-4">
+        <div>
+          <label class="block text-sm text-gray-400 mb-1.5">Ping Targets <span class="text-gray-600">(one per line)</span></label>
+          <textarea name="targets" rows="4"
+            class="w-full bg-surface text-gray-200 text-sm rounded-lg px-3 py-2 border border-gray-700 focus:border-accent outline-none font-mono">{{ cfg.failover.health.targets|join('\n') }}</textarea>
+        </div>
+
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-sm text-gray-400 mb-1.5">Check interval (seconds)</label>
+            <input type="number" name="interval_seconds" value="{{ cfg.failover.health.interval_seconds }}" min="2" max="300"
+              class="w-full bg-surface text-gray-200 text-sm rounded-lg px-3 py-2 border border-gray-700 focus:border-accent outline-none">
+          </div>
+          <div>
+            <label class="block text-sm text-gray-400 mb-1.5">Per-ping timeout (seconds)</label>
+            <input type="number" name="timeout_seconds" value="{{ cfg.failover.health.timeout_seconds }}" min="1" max="30"
+              class="w-full bg-surface text-gray-200 text-sm rounded-lg px-3 py-2 border border-gray-700 focus:border-accent outline-none">
+          </div>
+          <div>
+            <label class="block text-sm text-gray-400 mb-1.5">Fail threshold <span class="text-gray-600">(consecutive fails to mark DOWN)</span></label>
+            <input type="number" name="fail_threshold" value="{{ cfg.failover.health.fail_threshold }}" min="1" max="20"
+              class="w-full bg-surface text-gray-200 text-sm rounded-lg px-3 py-2 border border-gray-700 focus:border-accent outline-none">
+          </div>
+          <div>
+            <label class="block text-sm text-gray-400 mb-1.5">Recover threshold <span class="text-gray-600">(consecutive OK to mark UP)</span></label>
+            <input type="number" name="recover_threshold" value="{{ cfg.failover.health.recover_threshold }}" min="1" max="20"
+              class="w-full bg-surface text-gray-200 text-sm rounded-lg px-3 py-2 border border-gray-700 focus:border-accent outline-none">
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="flex gap-3">
+      <button type="submit" class="bg-accent hover:bg-accent/80 text-white text-sm px-6 py-2.5 rounded-lg transition font-medium">Save</button>
+      <a href="/failover/" class="bg-surface-lighter hover:bg-gray-600 text-gray-300 text-sm px-6 py-2.5 rounded-lg transition">Cancel</a>
+    </div>
+  </form>
+</div>
+
+<script>
+(function() {
+  const list = document.getElementById('priority-list');
+  const hidden = document.getElementById('priority-field');
+  if (!list || !hidden) return;
+
+  // A WAN is "in priority" if it doesn't have the "not in priority" class
+  // We'll track this by the .opacity-60 class on the <li>
+  function isInPriority(li) {
+    return !li.classList.contains('opacity-60');
+  }
+
+  function refreshRanks() {
+    let rank = 0;
+    list.querySelectorAll('li').forEach(li => {
+      const badge = li.querySelector('.rank-badge');
+      if (isInPriority(li)) {
+        rank += 1;
+        if (badge) badge.textContent = rank;
+        li.classList.remove('opacity-60');
+        // make sure it looks like a priority item
+        li.classList.remove('bg-surface-lighter/40');
+        li.classList.add('bg-surface-lighter');
+      } else {
+        if (badge) badge.textContent = '–';
+        li.classList.add('opacity-60');
+        li.classList.remove('bg-surface-lighter');
+        li.classList.add('bg-surface-lighter/40');
+      }
+    });
+    // Rebuild hidden field from in-priority items in current DOM order
+    const ids = Array.from(list.querySelectorAll('li'))
+      .filter(isInPriority)
+      .map(li => li.dataset.wanId);
+    hidden.value = ids.join(',');
+  }
+
+  // Button handlers (event delegation)
+  list.addEventListener('click', e => {
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    const li = btn.closest('li');
+    if (!li) return;
+    e.preventDefault();
+
+    if (btn.classList.contains('move-up')) {
+      const prev = li.previousElementSibling;
+      if (prev && isInPriority(prev)) {
+        list.insertBefore(li, prev);
+      }
+    } else if (btn.classList.contains('move-down')) {
+      const next = li.nextElementSibling;
+      if (next && isInPriority(next)) {
+        list.insertBefore(next, li);
+      }
+    } else if (btn.classList.contains('remove-from-priority')) {
+      // Convert to "not in priority": swap button group, move to bottom
+      rebuildControls(li, false);
+      list.appendChild(li);
+    } else if (btn.classList.contains('add-to-priority')) {
+      // Convert to "in priority": swap button group, move to end of priority items
+      rebuildControls(li, true);
+      // Insert after the last priority item
+      const items = Array.from(list.querySelectorAll('li'));
+      let insertAfter = null;
+      for (const item of items) {
+        if (item === li) continue;
+        if (isInPriority(item)) insertAfter = item;
+      }
+      if (insertAfter && insertAfter.nextSibling) {
+        list.insertBefore(li, insertAfter.nextSibling);
+      } else if (insertAfter) {
+        list.appendChild(li);
+      } else {
+        list.prepend(li);
+      }
+    }
+    refreshRanks();
+  });
+
+  function rebuildControls(li, toPriority) {
+    const btnBox = li.querySelector('.flex.gap-1.ml-2');
+    const notInPriSpan = li.querySelector('span.italic');
+    const natBadge = li.querySelector('span.rounded-full.border');
+
+    if (toPriority) {
+      // Needs up/down/remove buttons, restore coloring
+      if (btnBox) {
+        btnBox.innerHTML = `
+          <button type="button" class="move-up w-7 h-7 rounded bg-surface hover:bg-accent/30 text-gray-400 hover:text-white transition flex items-center justify-center" title="Move up">↑</button>
+          <button type="button" class="move-down w-7 h-7 rounded bg-surface hover:bg-accent/30 text-gray-400 hover:text-white transition flex items-center justify-center" title="Move down">↓</button>
+          <button type="button" class="remove-from-priority w-7 h-7 rounded bg-surface hover:bg-red-900/40 text-gray-400 hover:text-red-300 transition flex items-center justify-center" title="Remove from priority">×</button>
+        `;
+      }
+      // Remove "not in priority" span if it's there
+      if (notInPriSpan) notInPriSpan.remove();
+      // Restore name color
+      const name = li.querySelector('span.flex-1');
+      if (name) {
+        name.classList.remove('text-gray-400');
+        name.classList.add('text-white');
+      }
+      li.classList.remove('opacity-60');
+    } else {
+      // Only Add button
+      if (btnBox) {
+        btnBox.innerHTML = `
+          <button type="button" class="add-to-priority text-xs px-2 py-1 rounded bg-accent/30 hover:bg-accent/50 text-accent-light transition" title="Add to priority list">+ Add</button>
+        `;
+      }
+      // Dim name
+      const name = li.querySelector('span.flex-1');
+      if (name) {
+        name.classList.remove('text-white');
+        name.classList.add('text-gray-400');
+      }
+      // Add "not in priority" text (if not already there) — replace nat_mode badge visually
+      // Keep the nat_mode badge visible; we're not adding the italic "not in priority" span back
+      // because it's visually enough to see the dimmed row.
+      li.classList.add('opacity-60');
+    }
+  }
+
+  // Drag-and-drop reordering (in addition to buttons)
+  let dragging = null;
+
+  list.querySelectorAll('li').forEach(li => {
+    li.addEventListener('dragstart', e => {
+      dragging = li;
+      li.classList.add('opacity-40');
+      if (e.dataTransfer) {
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', li.dataset.wanId || '');
+      }
+    });
+    li.addEventListener('dragend', e => {
+      li.classList.remove('opacity-40');
+      dragging = null;
+      refreshRanks();
+    });
+  });
+
+  list.addEventListener('dragover', e => {
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+    if (!dragging) return;
+    const target = e.target.closest('li');
+    if (!target || target === dragging) return;
+    const rect = target.getBoundingClientRect();
+    const before = e.clientY < rect.top + rect.height / 2;
+    list.insertBefore(dragging, before ? target : target.nextSibling);
+  });
+
+  list.addEventListener('drop', e => {
+    e.preventDefault();
+  });
+
+  // Initial pass to set rank numbers
+  refreshRanks();
+})();
+</script>
+{% endblock %}

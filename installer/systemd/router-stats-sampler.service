@@ -1,0 +1,15 @@
+[Unit]
+Description=Awesome Router 2 - WAN bandwidth sampler
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/router-stats-sampler.py
+Restart=always
+RestartSec=2
+Nice=10
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

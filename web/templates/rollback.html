@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Rollback - Awesome Router 2{% endblock %}
+
+{% block content %}
+<div class="fade-in max-w-3xl">
+  <h2 class="text-2xl font-bold text-white mb-6">Rollback</h2>
+
+  {% if snapshots %}
+  <div class="space-y-2">
+    {% for snap in snapshots %}
+    <div class="bg-surface-light rounded-xl border border-gray-700/50 p-4 flex items-center justify-between">
+      <div>
+        <span class="text-sm text-gray-300 font-mono">{{ snap.timestamp }}</span>
+        <span class="text-xs text-gray-500 ml-2">{{ snap.filename }}</span>
+      </div>
+      <form method="post" action="/system/rollback">
+        <input type="hidden" name="snapshot_path" value="{{ snap.path }}">
+        <button type="submit" class="bg-yellow-900/40 hover:bg-yellow-800/60 text-yellow-300 text-sm px-4 py-1.5 rounded-lg transition border border-yellow-700/40"
+          onclick="return confirm('Restore routing state from {{ snap.timestamp }}?')">
+          Restore
+        </button>
+      </form>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="bg-surface-light rounded-xl border border-gray-700/50 p-5">
+    <p class="text-gray-500 text-sm">No snapshots available. Snapshots are created automatically before each Apply.</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
