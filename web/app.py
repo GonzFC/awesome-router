@@ -12,6 +12,7 @@ from web.routes.dashboard import bp as dashboard_bp
 from web.routes.wans import bp as wans_bp
 from web.routes.system import bp as system_bp
 from web.routes.failover import bp as failover_bp
+from web.routes.udm import bp as udm_bp
 from web.routes.api import bp as api_bp
 
 
@@ -27,6 +28,7 @@ def create_app() -> Flask:
     app.register_blueprint(wans_bp, url_prefix="/wans")
     app.register_blueprint(system_bp, url_prefix="/system")
     app.register_blueprint(failover_bp, url_prefix="/failover")
+    app.register_blueprint(udm_bp, url_prefix="/udm")
     app.register_blueprint(api_bp, url_prefix="/api")
 
     return app

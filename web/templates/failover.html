@@ -103,6 +103,17 @@
     </div>
   </div>
 
+  <!-- UDM Integration -->
+  <div class="bg-surface-light rounded-xl border border-gray-700/50 p-5 mb-4" id="udm-card">
+    <div class="flex items-center justify-between mb-3">
+      <h3 class="font-semibold text-white">UDM Integration</h3>
+      <a href="/udm/edit" class="text-xs text-accent-light hover:text-white transition">Configure →</a>
+    </div>
+    <div id="udm-body" class="text-sm text-gray-500">
+      Loading UDM status…
+    </div>
+  </div>
+
   <!-- Recent events -->
   <div class="bg-surface-light rounded-xl border border-gray-700/50 p-5">
     <h3 class="font-semibold text-white mb-3">Recent Events</h3>
@@ -126,18 +137,102 @@
 
 {% block scripts %}
 <script>
-// Auto-refresh health state every 5 seconds
-{% if cfg.failover.enabled %}
-async function refreshHealth() {
-  try {
-    const resp = await fetch('/api/health');
-    if (!resp.ok) return;
-    // Simple approach: reload the page so the server renders with fresh state.
-    // For snappier UX we could do fine-grained DOM updates, but this works.
-    // Only reload if page has been visible for at least 5s to avoid loops.
-  } catch(e) {}
+// ───────── UDM status card (fetched separately so it can update fast) ─────────
+
+function humanBps(bps) {
+  if (!bps && bps !== 0) return '—';
+  if (bps >= 1e9) return (bps / 1e9).toFixed(2) + ' Gb/s';
+  if (bps >= 1e6) return (bps / 1e6).toFixed(1) + ' Mb/s';
+  if (bps >= 1e3) return (bps / 1e3).toFixed(0) + ' Kb/s';
+  return bps.toFixed(0) + ' b/s';
 }
-setInterval(() => location.reload(), 15000);
+
+function humanUptime(s) {
+  if (!s) return '—';
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (d) return `${d}d ${h}h`;
+  if (h) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+function ago(iso) {
+  if (!iso) return '—';
+  const delta = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+  if (delta < 60) return `${Math.floor(delta)}s ago`;
+  if (delta < 3600) return `${Math.floor(delta / 60)}m ago`;
+  return `${Math.floor(delta / 3600)}h ago`;
+}
+
+async function refreshUdm() {
+  const body = document.getElementById('udm-body');
+  if (!body) return;
+  try {
+    const resp = await fetch('/udm/api/status');
+    if (!resp.ok) {
+      body.innerHTML = `<span class="text-red-400">API error (${resp.status})</span>`;
+      return;
+    }
+    const d = await resp.json();
+    if (!d.enabled) {
+      body.innerHTML = `
+        <p class="text-gray-400">UDM integration is not enabled.</p>
+        <a href="/udm/edit" class="inline-block mt-2 text-xs text-accent-light hover:text-white transition">Configure UDM →</a>`;
+      return;
+    }
+    if (d.reachable === false) {
+      body.innerHTML = `
+        <div class="flex items-center gap-2">
+          <span class="w-2.5 h-2.5 rounded-full bg-red-400"></span>
+          <span class="text-red-300">${d.error || 'unreachable'}${d.detail ? ' — ' + d.detail : ''}</span>
+        </div>`;
+      return;
+    }
+    if (d.error) {
+      body.innerHTML = `
+        <div class="flex items-center gap-2">
+          <span class="w-2.5 h-2.5 rounded-full bg-yellow-400"></span>
+          <span class="text-yellow-300">${d.error}${d.detail ? ' — ' + d.detail : ''}</span>
+        </div>`;
+      return;
+    }
+    const g = d.gateway || {};
+    const stateColor = g.state === 'ONLINE' ? 'bg-emerald-400' : 'bg-red-400';
+    const stateText = g.state === 'ONLINE' ? 'text-emerald-400' : 'text-red-400';
+    const memColor = g.mem_pct > 85 ? 'text-red-400' : g.mem_pct > 70 ? 'text-yellow-400' : 'text-gray-300';
+    body.innerHTML = `
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-x-8 gap-y-2 text-sm">
+        <div class="flex justify-between"><span class="text-gray-500">Controller</span><span class="text-gray-300 font-mono">v${d.controller_version || '?'}</span></div>
+        <div class="flex justify-between"><span class="text-gray-500">Gateway</span><span class="text-gray-300">${g.name || ''} <span class="text-gray-500">(${g.model || ''})</span></span></div>
+        <div class="flex justify-between"><span class="text-gray-500">State</span><span class="flex items-center gap-2"><span class="w-2 h-2 rounded-full ${stateColor}"></span><span class="${stateText}">${g.state || '?'}</span></span></div>
+        <div class="flex justify-between"><span class="text-gray-500">Firmware</span><span class="text-gray-300 font-mono text-xs">${g.firmware || '—'}</span></div>
+        <div class="flex justify-between"><span class="text-gray-500">WAN IP (UDM view)</span><span class="text-gray-300 font-mono">${g.ip || '—'}</span></div>
+        <div class="flex justify-between"><span class="text-gray-500">Last heartbeat</span><span class="text-gray-300">${ago(g.last_heartbeat)}</span></div>
+        <div class="flex justify-between"><span class="text-gray-500">UDM uptime</span><span class="text-gray-300">${humanUptime(g.uptime_sec)}</span></div>
+        <div class="flex justify-between"><span class="text-gray-500">CPU / Mem</span><span class="text-gray-300">${(g.cpu_pct || 0).toFixed(1)}% / <span class="${memColor}">${(g.mem_pct || 0).toFixed(1)}%</span></span></div>
+      </div>
+      <div class="mt-3 pt-3 border-t border-gray-700/40 grid grid-cols-2 gap-4 text-sm">
+        <div>
+          <div class="text-xs text-gray-500 mb-0.5">UDM-reported uplink ↓</div>
+          <div class="text-emerald-300 font-mono">${humanBps(g.uplink_rx_bps)}</div>
+        </div>
+        <div>
+          <div class="text-xs text-gray-500 mb-0.5">UDM-reported uplink ↑</div>
+          <div class="text-blue-300 font-mono">${humanBps(g.uplink_tx_bps)}</div>
+        </div>
+      </div>`;
+  } catch (e) {
+    body.innerHTML = `<span class="text-red-400">${e.message}</span>`;
+  }
+}
+
+refreshUdm();
+setInterval(refreshUdm, 5000);
+
+// ───────── Auto-refresh whole page periodically for events list ─────────
+{% if cfg.failover.enabled %}
+setInterval(() => location.reload(), 30000);
 {% endif %}
 </script>
 {% endblock %}

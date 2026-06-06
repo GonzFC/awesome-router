@@ -18,6 +18,7 @@ all from a clean web GUI.
 - **Bandwidth sampling** — 15s resolution, 30-day retention in SQLite
 - **Snapshots & rollback** — every apply takes a snapshot; one-click revert from the GUI
 - **Recovery actions** — flush + re-apply, restart networkd, all from the GUI (no SSH needed when stuck)
+- **UDM Integration** (v1.2) — closed-loop failover verification using the Unifi UDM Local API: AR cross-checks its routing decisions against UDM's own view of the uplink and takes corrective action (conntrack flush, ARP refresh, re-apply) when they disagree
 - **Idempotent** — safe to re-run the installer or apply at any time
 
 ## Quickstart

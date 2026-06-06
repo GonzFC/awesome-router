@@ -10,7 +10,7 @@ import yaml
 
 from .models import (
     Bandwidth, FailoverConfig, HealthConfig, LanConfig, Pair,
-    RouterConfig, WanConfig,
+    RouterConfig, UdmConfig, WanConfig,
 )
 
 DEFAULT_CONFIG_PATH = "/etc/awesome-router.yaml"
@@ -86,12 +86,27 @@ def _parse(raw: dict) -> RouterConfig:
         health=health,
     )
 
+    # UDM section (optional)
+    udm_raw = raw.get("udm", {}) or {}
+    udm = UdmConfig(
+        enabled=udm_raw.get("enabled", False),
+        host=udm_raw.get("host", ""),
+        key_file=udm_raw.get("key_file", "/etc/awesome-router/udm.key"),
+        verify_ssl=udm_raw.get("verify_ssl", False),
+        site_id=udm_raw.get("site_id", "auto"),
+        gateway_device_id=udm_raw.get("gateway_device_id", "auto"),
+        poll_interval_seconds=udm_raw.get("poll_interval_seconds", 30),
+        cache_seconds=udm_raw.get("cache_seconds", 5),
+        disagreement_threshold=udm_raw.get("disagreement_threshold", 3),
+    )
+
     return RouterConfig(
         version=version,
         lan=lan,
         vm_default_wan=raw.get("vm_default_wan", ""),
         wans=wans,
         failover=failover,
+        udm=udm,
     )
 
 
@@ -146,6 +161,21 @@ def _serialize(config: RouterConfig) -> dict:
                 "fail_threshold": f.health.fail_threshold,
                 "recover_threshold": f.health.recover_threshold,
             },
+        }
+
+    # UDM section (only if enabled or partially configured)
+    u = config.udm
+    if u.enabled or u.host:
+        result["udm"] = {
+            "enabled": u.enabled,
+            "host": u.host,
+            "key_file": u.key_file,
+            "verify_ssl": u.verify_ssl,
+            "site_id": u.site_id,
+            "gateway_device_id": u.gateway_device_id,
+            "poll_interval_seconds": u.poll_interval_seconds,
+            "cache_seconds": u.cache_seconds,
+            "disagreement_threshold": u.disagreement_threshold,
         }
 
     return result

@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}UDM Integration - Awesome Router 2{% endblock %}
+
+{% block content %}
+<div class="fade-in max-w-3xl">
+  <h2 class="text-2xl font-bold text-white mb-1">UDM Integration</h2>
+  <p class="text-sm text-gray-500 mb-6">
+    Connect to a Unifi UDM/UDR via its Local API. The Awesome Router uses this
+    to verify that failover is actually working end-to-end, not just from the
+    AR's own view.
+  </p>
+
+  <!-- Connection settings -->
+  <form method="post" action="/udm/edit" class="space-y-5">
+    <div class="bg-surface-light rounded-xl border border-gray-700/50 p-5 space-y-5">
+      <div>
+        <label class="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+          <input type="checkbox" name="enabled" {{ 'checked' if cfg.udm.enabled }}
+            class="rounded border-gray-600 bg-surface text-accent focus:ring-accent">
+          <span class="font-semibold text-white">Enable UDM integration</span>
+        </label>
+      </div>
+
+      <div>
+        <label class="block text-sm text-gray-400 mb-1.5">UDM host or IP</label>
+        <input type="text" name="host" value="{{ cfg.udm.host }}" placeholder="192.168.14.251"
+          class="w-full bg-surface text-gray-200 text-sm rounded-lg px-3 py-2 border border-gray-700 focus:border-accent outline-none font-mono">
+        <p class="text-xs text-gray-500 mt-1">Hostname or IP reachable from the Awesome Router (e.g. on the management interface).</p>
+      </div>
+
+      <div>
+        <label class="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+          <input type="checkbox" name="verify_ssl" {{ 'checked' if cfg.udm.verify_ssl }}
+            class="rounded border-gray-600 bg-surface text-accent focus:ring-accent">
+          Verify SSL certificate
+        </label>
+        <p class="text-xs text-gray-500 mt-1 ml-6">Leave off for UDM's default self-signed cert.</p>
+      </div>
+
+      <div class="grid grid-cols-2 gap-4">
+        <div>
+          <label class="block text-sm text-gray-400 mb-1.5">Site ID</label>
+          <input type="text" name="site_id" value="{{ cfg.udm.site_id }}" placeholder="auto"
+            class="w-full bg-surface text-gray-200 text-sm rounded-lg px-3 py-2 border border-gray-700 focus:border-accent outline-none font-mono">
+          <p class="text-xs text-gray-500 mt-1"><code class="text-gray-400">auto</code> = first site (most installs).</p>
+        </div>
+        <div>
+          <label class="block text-sm text-gray-400 mb-1.5">Gateway device ID</label>
+          <input type="text" name="gateway_device_id" value="{{ cfg.udm.gateway_device_id }}" placeholder="auto"
+            class="w-full bg-surface text-gray-200 text-sm rounded-lg px-3 py-2 border border-gray-700 focus:border-accent outline-none font-mono">
+          <p class="text-xs text-gray-500 mt-1"><code class="text-gray-400">auto</code> = detect by model (UDM/UDR).</p>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-2 gap-4">
+        <div>
+          <label class="block text-sm text-gray-400 mb-1.5">Poll interval (seconds)</label>
+          <input type="number" name="poll_interval_seconds" value="{{ cfg.udm.poll_interval_seconds }}" min="5" max="600"
+            class="w-full bg-surface text-gray-200 text-sm rounded-lg px-3 py-2 border border-gray-700 focus:border-accent outline-none">
+        </div>
+        <div>
+          <label class="block text-sm text-gray-400 mb-1.5">Disagreement threshold</label>
+          <input type="number" name="disagreement_threshold" value="{{ cfg.udm.disagreement_threshold }}" min="1" max="20"
+            class="w-full bg-surface text-gray-200 text-sm rounded-lg px-3 py-2 border border-gray-700 focus:border-accent outline-none">
+          <p class="text-xs text-gray-500 mt-1">Consecutive cycles AR/UDM disagree before corrective action.</p>
+        </div>
+      </div>
+
+      <div class="flex gap-3 pt-2">
+        <button type="submit" class="bg-accent hover:bg-accent/80 text-white text-sm px-5 py-2 rounded-lg transition font-medium">Save Settings</button>
+        <a href="/failover/" class="bg-surface-lighter hover:bg-gray-600 text-gray-300 text-sm px-5 py-2 rounded-lg transition">Cancel</a>
+      </div>
+    </div>
+  </form>
+
+  <!-- API key (separate form so settings save doesn't carry the secret) -->
+  <div class="bg-surface-light rounded-xl border border-gray-700/50 p-5 mt-5">
+    <h3 class="font-semibold text-white mb-1">API key</h3>
+    <p class="text-xs text-gray-500 mb-4">
+      Stored separately at <code class="text-gray-400">{{ cfg.udm.key_file }}</code> with <code class="text-gray-400">0600 root:root</code>.
+      Currently:
+      {% if key_present %}
+      <span class="text-emerald-400">✓ a key file is present</span>
+      {% else %}
+      <span class="text-red-400">✗ no key file</span>
+      {% endif %}
+    </p>
+    <form method="post" action="/udm/key" class="flex gap-3">
+      <input type="password" name="api_key" placeholder="paste UDM API key here"
+        autocomplete="off"
+        class="flex-1 bg-surface text-gray-200 text-sm rounded-lg px-3 py-2 border border-gray-700 focus:border-accent outline-none font-mono">
+      <button type="submit" class="bg-surface-lighter hover:bg-gray-600 text-gray-200 text-sm px-5 py-2 rounded-lg transition">Save key</button>
+    </form>
+    <p class="text-xs text-gray-500 mt-2">Generate in the UDM UI: <code>Settings → Control Plane → Integrations → Create API Key</code>.</p>
+  </div>
+
+  <!-- Test connection -->
+  <div class="bg-surface-light rounded-xl border border-gray-700/50 p-5 mt-5">
+    <h3 class="font-semibold text-white mb-1">Test connection</h3>
+    <p class="text-xs text-gray-500 mb-4">Hit <code class="text-gray-400">/info</code> and <code class="text-gray-400">/sites</code> to confirm host + key + route work.</p>
+    <form method="post" action="/udm/test">
+      <button type="submit" class="bg-accent hover:bg-accent/80 text-white text-sm px-5 py-2 rounded-lg transition">Test now</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

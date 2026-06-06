@@ -23,6 +23,9 @@ from typing import Optional
 
 from . import config as cfg
 from .models import RouterConfig, WanConfig
+from .udm_client import (
+    UdmClient, UdmError, UdmUnauthorized, UdmUnreachable, UdmStats,
+)
 
 STATE_DIR = "/run/awesome-router"
 STATE_FILE = f"{STATE_DIR}/health.json"
@@ -53,10 +56,31 @@ class WanHealth:
 
 
 @dataclass
+class UdmState:
+    """Latest UDM observation + verification state."""
+    reachable: bool = False
+    error: str = ""
+    controller_version: str = ""
+    device_state: str = ""           # ONLINE / OFFLINE / ...
+    device_name: str = ""
+    device_model: str = ""
+    last_heartbeat: str = ""
+    uplink_tx_bps: int = 0
+    uplink_rx_bps: int = 0
+    last_polled: int = 0
+    # disagreement counter — how many consecutive cycles AR says "all good"
+    # but UDM is not actually transmitting through us
+    consecutive_disagreements: int = 0
+    last_action: str = ""
+    last_action_at: int = 0
+
+
+@dataclass
 class FailoverState:
     active_wan: Optional[str] = None
     wans: dict[str, WanHealth] = field(default_factory=dict)
     last_update: int = 0
+    udm: UdmState = field(default_factory=UdmState)
 
 
 # ---------------------------------------------------------------------------
@@ -201,6 +225,7 @@ def _ensure_state_dir():
 
 def save_state(state: FailoverState):
     _ensure_state_dir()
+    u = state.udm
     data = {
         "active_wan": state.active_wan,
         "last_update": state.last_update,
@@ -218,6 +243,21 @@ def save_state(state: FailoverState):
                 },
             }
             for wid, h in state.wans.items()
+        },
+        "udm": {
+            "reachable": u.reachable,
+            "error": u.error,
+            "controller_version": u.controller_version,
+            "device_state": u.device_state,
+            "device_name": u.device_name,
+            "device_model": u.device_model,
+            "last_heartbeat": u.last_heartbeat,
+            "uplink_tx_bps": u.uplink_tx_bps,
+            "uplink_rx_bps": u.uplink_rx_bps,
+            "last_polled": u.last_polled,
+            "consecutive_disagreements": u.consecutive_disagreements,
+            "last_action": u.last_action,
+            "last_action_at": u.last_action_at,
         },
     }
     tmp = STATE_FILE + ".tmp"
@@ -320,11 +360,24 @@ class HealthDaemon:
         self.config: Optional[RouterConfig] = None
         self._last_config_load = 0
         self._tick_count = 0
+        self._udm_client: Optional[UdmClient] = None
+        self._udm_site_id: Optional[str] = None
+        self._udm_gw_id: Optional[str] = None
+        self._last_udm_poll = 0
         self._load_config()
 
     def _load_config(self):
         try:
-            self.config = cfg.load()
+            new_config = cfg.load()
+            # If UDM section changed, rebuild client
+            if (self.config is None
+                or self.config.udm.host != new_config.udm.host
+                or self.config.udm.enabled != new_config.udm.enabled
+                or self.config.udm.key_file != new_config.udm.key_file):
+                self._udm_client = None
+                self._udm_site_id = None
+                self._udm_gw_id = None
+            self.config = new_config
             self._last_config_load = time.time()
         except Exception as e:
             print(f"[health] config load error: {e}", flush=True)
@@ -332,6 +385,180 @@ class HealthDaemon:
     def _maybe_reload_config(self):
         if time.time() - self._last_config_load > 30:
             self._load_config()
+
+    def _ensure_udm_client(self) -> Optional[UdmClient]:
+        """Build and cache the UDM client lazily."""
+        if not self.config or not self.config.udm.enabled or not self.config.udm.host:
+            return None
+        if self._udm_client is not None:
+            return self._udm_client
+        try:
+            self._udm_client = UdmClient(
+                host=self.config.udm.host,
+                key_file=self.config.udm.key_file,
+                verify_ssl=self.config.udm.verify_ssl,
+                cache_seconds=self.config.udm.cache_seconds,
+            )
+            return self._udm_client
+        except UdmError as e:
+            self.state.udm.error = f"client init: {e}"
+            return None
+
+    def _resolve_udm_targets(self, client: UdmClient) -> bool:
+        """Resolve site_id and gateway device_id (caches them)."""
+        if self._udm_site_id and self._udm_gw_id:
+            return True
+        site_id = self.config.udm.site_id
+        try:
+            if site_id == "auto":
+                site_id = client.default_site_id()
+            if not site_id:
+                self.state.udm.error = "no sites found"
+                return False
+            self._udm_site_id = site_id
+            gw_id = self.config.udm.gateway_device_id
+            if gw_id == "auto":
+                gw = client.find_gateway(site_id)
+                if not gw:
+                    self.state.udm.error = "no UDM/UDR gateway in site"
+                    return False
+                self._udm_gw_id = gw.id
+                self.state.udm.device_name = gw.name
+                self.state.udm.device_model = gw.model
+            else:
+                self._udm_gw_id = gw_id
+            return True
+        except UdmError as e:
+            self.state.udm.error = f"resolve: {e}"
+            return False
+
+    def _poll_udm(self, now: int):
+        """Query UDM, update state.udm, and decide whether to act."""
+        if not self.config or not self.config.udm.enabled:
+            return
+
+        # Honor poll_interval_seconds (don't poll every tick)
+        interval = max(5, self.config.udm.poll_interval_seconds)
+        if now - self._last_udm_poll < interval:
+            return
+        self._last_udm_poll = now
+
+        u = self.state.udm
+        client = self._ensure_udm_client()
+        if client is None:
+            u.reachable = False
+            return
+
+        if not self._resolve_udm_targets(client):
+            u.reachable = False
+            return
+
+        try:
+            info = client.info()
+            d = client.device(self._udm_site_id, self._udm_gw_id)
+            stats = client.device_stats(self._udm_site_id, self._udm_gw_id)
+            u.reachable = True
+            u.error = ""
+            u.controller_version = info.get("applicationVersion", "")
+            u.device_state = d.get("state", "")
+            u.device_name = d.get("name", u.device_name)
+            u.device_model = d.get("model", u.device_model)
+            u.last_heartbeat = stats.last_heartbeat
+            u.uplink_tx_bps = stats.uplink_tx_bps
+            u.uplink_rx_bps = stats.uplink_rx_bps
+            u.last_polled = now
+        except UdmUnauthorized as e:
+            u.reachable = False
+            u.error = f"unauthorized: {e}"
+            return
+        except UdmUnreachable as e:
+            u.reachable = False
+            u.error = f"unreachable: {e}"
+            # If UDM disappears, that's itself a disagreement signal
+            u.consecutive_disagreements += 1
+        except UdmError as e:
+            u.reachable = False
+            u.error = f"api: {e}"
+            return
+
+        # ─── verification logic ─────────────────────────────────────────
+        # AR thinks the active WAN is OK if state.active_wan exists and is up.
+        ar_thinks_ok = False
+        if self.state.active_wan:
+            wh = self.state.wans.get(self.state.active_wan)
+            ar_thinks_ok = bool(wh and wh.is_up)
+
+        # UDM signals trouble if:
+        #   - state != ONLINE  (UDM controller marks it offline), OR
+        #   - uplink_rx_bps == 0 AND uplink_tx_bps == 0 AND AR thinks healthy
+        #     for one poll cycle. Idle networks can be 0 bps, so a single
+        #     zero-tick alone isn't enough — we accumulate across cycles.
+        udm_silent = (u.uplink_tx_bps == 0 and u.uplink_rx_bps == 0)
+        udm_offline = u.device_state and u.device_state != "ONLINE"
+
+        if ar_thinks_ok and udm_offline:
+            u.consecutive_disagreements += 1
+            log_event(f"UDM disagrees: AR says active WAN OK, UDM state={u.device_state} (count {u.consecutive_disagreements})")
+        elif ar_thinks_ok and udm_silent and u.reachable:
+            # Silent + AR healthy could be idle. Count once and let the
+            # threshold decide. Heartbeat freshness is a sanity check.
+            u.consecutive_disagreements += 1
+        else:
+            if u.consecutive_disagreements > 0:
+                log_event(f"UDM agrees again (reset {u.consecutive_disagreements} -> 0)")
+            u.consecutive_disagreements = 0
+
+        # Trigger corrective action if threshold crossed
+        threshold = self.config.udm.disagreement_threshold
+        if u.consecutive_disagreements >= threshold:
+            self._take_corrective_action(now)
+
+    def _take_corrective_action(self, now: int):
+        """Escalating ladder of corrective actions when AR/UDM disagree."""
+        if not self.config:
+            return
+        u = self.state.udm
+        fip = self.config.failover.failover_ip
+        lan_iface = self.config.lan.interface
+
+        # Pick next action based on what we've tried recently
+        # Simple ladder: conntrack flush → ARP refresh → re-apply
+        last = u.last_action
+        if last in ("", "reapply"):
+            action = "conntrack_flush"
+        elif last == "conntrack_flush":
+            action = "arp_refresh"
+        elif last == "arp_refresh":
+            action = "reapply"
+        else:
+            action = "conntrack_flush"
+
+        if action == "conntrack_flush" and fip:
+            subprocess.run(
+                ["sudo", "conntrack", "-D", "-s", fip],
+                capture_output=True, timeout=5,
+            )
+            log_event(f"Corrective action: flushed conntrack for {fip}")
+        elif action == "arp_refresh" and lan_iface:
+            subprocess.run(
+                ["sudo", "ip", "neigh", "flush", "dev", lan_iface],
+                capture_output=True, timeout=5,
+            )
+            log_event(f"Corrective action: flushed ARP on {lan_iface}")
+        elif action == "reapply":
+            # Re-run apply engine to rebuild routes/nft from config
+            try:
+                from . import apply_engine
+                result = apply_engine.apply(self.config, dry_run=False)
+                changes = len(result.get("changes", [])) if result.get("ok") else 0
+                log_event(f"Corrective action: re-applied config ({changes} changes)")
+            except Exception as e:
+                log_event(f"Corrective action: re-apply FAILED: {e}")
+
+        u.last_action = action
+        u.last_action_at = now
+        # Reset counter after action to give it a chance to take effect
+        u.consecutive_disagreements = 0
 
     def run(self):
         print("[health] daemon starting (fping+nping mode)", flush=True)
@@ -458,6 +685,9 @@ class HealthDaemon:
                     self.state.active_wan = new_active
             elif new_active:
                 self.state.active_wan = new_active
+
+        # Poll UDM after we know our own state — verification compares them
+        self._poll_udm(now)
 
         save_state(self.state)
 

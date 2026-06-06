@@ -93,6 +93,31 @@ class FailoverConfig:
 
 
 @dataclass
+class UdmConfig:
+    """Optional integration with a Unifi UDM/UDR via Local API.
+
+    When enabled, the AR queries the UDM Local API for an independent view
+    of WAN/uplink health and traffic. The health daemon cross-checks AR's
+    decisions against UDM reality and can take corrective action when they
+    disagree (flush conntrack, refresh ARP, re-apply).
+
+    The api_key is stored in a separate file (key_file) with 0600 perms —
+    never inlined into /etc/awesome-router.yaml.
+    """
+    enabled: bool = False
+    host: str = ""                              # e.g. "192.168.14.251"
+    key_file: str = "/etc/awesome-router/udm.key"
+    verify_ssl: bool = False
+    site_id: str = "auto"                       # "auto" = use first/default site
+    gateway_device_id: str = "auto"             # "auto" = find UDM/UDR by model
+    poll_interval_seconds: int = 30             # how often health daemon queries
+    cache_seconds: int = 5                      # in-process response cache TTL
+
+    # Verification thresholds — when AR thinks WAN OK but UDM disagrees:
+    disagreement_threshold: int = 3             # consecutive disagreements before acting
+
+
+@dataclass
 class RouterConfig:
     """Complete router configuration."""
     version: int
@@ -100,6 +125,7 @@ class RouterConfig:
     vm_default_wan: str                    # WAN id for VM's own traffic
     wans: dict[str, WanConfig]             # keyed by WAN id
     failover: FailoverConfig = field(default_factory=FailoverConfig)
+    udm: UdmConfig = field(default_factory=UdmConfig)
 
     def get_wan(self, wan_id: str) -> Optional[WanConfig]:
         return self.wans.get(wan_id)
