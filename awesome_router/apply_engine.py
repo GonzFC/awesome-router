@@ -119,7 +119,67 @@ def plan(config: RouterConfig) -> list[Change]:
     # 7. nftables
     _plan_nftables(changes, config)
 
+    # 8. End-to-end probe routing (additive only — never removes anything)
+    if config.e2e_probe.enabled:
+        _plan_e2e_probe(changes, config)
+
     return changes
+
+
+def _plan_e2e_probe(changes: list[Change], config):
+    """Ensure end-to-end probe routing is in place: dedicated table + rule.
+
+    Pure-additive: only ADDs the table entry, default route in that table,
+    and the ip rule. Never removes anything. If the probe gets disabled later,
+    the entries linger harmlessly until the next reboot or manual cleanup.
+    """
+    e = config.e2e_probe
+    if not (e.source_interface and e.source_ip and e.upstream_gateway):
+        return
+
+    # rt_tables entry: "<id> probe"
+    try:
+        with open(RT_TABLES_PATH) as f:
+            content = f.read()
+    except FileNotFoundError:
+        content = ""
+    pattern = rf"^\s*{e.table_id}\s+probe\s*$"
+    if not re.search(pattern, content, re.MULTILINE):
+        changes.append(Change(
+            category="rt_table",
+            action="add",
+            description=f"Add rt_table entry: {e.table_id} probe",
+        ))
+
+    # Default route in the probe table
+    routes = discovery.get_routes(str(e.table_id))
+    has_default = any(r.destination == "default" and r.gateway == e.upstream_gateway
+                       and r.device == e.source_interface for r in routes)
+    if not has_default:
+        changes.append(Change(
+            category="route",
+            action="add",
+            description=f"Add e2e probe default route: table {e.table_id} via {e.upstream_gateway} dev {e.source_interface}",
+            commands=[["sudo", "ip", "route", "replace", "table", str(e.table_id),
+                       "default", "via", e.upstream_gateway, "dev", e.source_interface]],
+        ))
+
+    # ip rule: from <source_ip>/32 lookup <table_id> pref <priority>
+    current_rules = discovery.get_rules()
+    rule_present = any(
+        r.priority == e.rule_priority
+        and _normalize_source(r.source) == f"{e.source_ip}/32"
+        and (r.table == str(e.table_id) or r.table == "probe")
+        for r in current_rules
+    )
+    if not rule_present:
+        changes.append(Change(
+            category="rule",
+            action="add",
+            description=f"Add e2e probe rule: from {e.source_ip}/32 -> table {e.table_id} pref {e.rule_priority}",
+            commands=[["sudo", "ip", "rule", "add", "from", f"{e.source_ip}/32",
+                       "table", str(e.table_id), "pref", str(e.rule_priority)]],
+        ))
 
 
 def _plan_netplan(changes: list[Change], config: RouterConfig):
@@ -317,6 +377,11 @@ def _plan_ip_rules(changes: list[Change], config: RouterConfig):
     f = config.failover
     if f.enabled and f.failover_ip:
         desired[f"{f.failover_ip}/32"] = ("failover", f.table_id, 50)
+
+    # End-to-end probe rule — register so general cleanup doesn't flag it.
+    e = config.e2e_probe
+    if e.enabled and e.source_ip:
+        desired[f"{e.source_ip}/32"] = ("probe", e.table_id, e.rule_priority)
 
     # Rules to add
     for src, (tname, tid, pref) in desired.items():

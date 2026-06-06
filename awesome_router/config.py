@@ -9,8 +9,8 @@ from pathlib import Path
 import yaml
 
 from .models import (
-    Bandwidth, FailoverConfig, HealthConfig, LanConfig, Pair,
-    RouterConfig, UdmConfig, WanConfig,
+    Bandwidth, E2eProbeConfig, FailoverConfig, GatewaySwitcherConfig,
+    HealthConfig, LanConfig, Pair, RouterConfig, UdmConfig, WanConfig,
 )
 
 DEFAULT_CONFIG_PATH = "/etc/awesome-router.yaml"
@@ -100,6 +100,29 @@ def _parse(raw: dict) -> RouterConfig:
         disagreement_threshold=udm_raw.get("disagreement_threshold", 3),
     )
 
+    # End-to-end probe (optional)
+    e2e_raw = raw.get("e2e_probe", {}) or {}
+    e2e_probe = E2eProbeConfig(
+        enabled=e2e_raw.get("enabled", False),
+        source_interface=e2e_raw.get("source_interface", ""),
+        source_ip=e2e_raw.get("source_ip", ""),
+        upstream_gateway=e2e_raw.get("upstream_gateway", ""),
+        table_id=e2e_raw.get("table_id", 50),
+        rule_priority=e2e_raw.get("rule_priority", 90),
+        targets=e2e_raw.get("targets", ["1.1.1.1", "8.8.8.8"]),
+        interval_seconds=e2e_raw.get("interval_seconds", 30),
+    )
+
+    # Gateway switcher (optional)
+    gs_raw = raw.get("gateway_switcher", {}) or {}
+    gateway_switcher = GatewaySwitcherConfig(
+        verification_window_seconds=gs_raw.get("verification_window_seconds", 10),
+        sample_interval_seconds=gs_raw.get("sample_interval_seconds", 2),
+        required_passing_samples=gs_raw.get("required_passing_samples", 2),
+        auto_rollback=gs_raw.get("auto_rollback", True),
+        watchdog_timeout_seconds=gs_raw.get("watchdog_timeout_seconds", 30),
+    )
+
     return RouterConfig(
         version=version,
         lan=lan,
@@ -107,6 +130,8 @@ def _parse(raw: dict) -> RouterConfig:
         wans=wans,
         failover=failover,
         udm=udm,
+        e2e_probe=e2e_probe,
+        gateway_switcher=gateway_switcher,
     )
 
 
@@ -177,6 +202,30 @@ def _serialize(config: RouterConfig) -> dict:
             "cache_seconds": u.cache_seconds,
             "disagreement_threshold": u.disagreement_threshold,
         }
+
+    # End-to-end probe
+    e = config.e2e_probe
+    if e.enabled or e.source_interface or e.source_ip:
+        result["e2e_probe"] = {
+            "enabled": e.enabled,
+            "source_interface": e.source_interface,
+            "source_ip": e.source_ip,
+            "upstream_gateway": e.upstream_gateway,
+            "table_id": e.table_id,
+            "rule_priority": e.rule_priority,
+            "targets": list(e.targets),
+            "interval_seconds": e.interval_seconds,
+        }
+
+    # Gateway switcher (always include — it's small and has sensible defaults)
+    gs = config.gateway_switcher
+    result["gateway_switcher"] = {
+        "verification_window_seconds": gs.verification_window_seconds,
+        "sample_interval_seconds": gs.sample_interval_seconds,
+        "required_passing_samples": gs.required_passing_samples,
+        "auto_rollback": gs.auto_rollback,
+        "watchdog_timeout_seconds": gs.watchdog_timeout_seconds,
+    }
 
     return result
 

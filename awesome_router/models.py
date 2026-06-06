@@ -118,6 +118,44 @@ class UdmConfig:
 
 
 @dataclass
+class E2eProbeConfig:
+    """End-to-end probe: AR has an interface in a UDM-managed VLAN.
+
+    When enabled, the apply engine adds a dedicated routing table + ip rule
+    so that traffic from the probe source IP is forced through the UDM's
+    VLAN gateway. This lets AR probe through the FULL chain:
+
+        AR.enX4 → UDM.VLAN-gw → UDM.WAN → AR.enX0 → failover → WAN → Internet
+
+    A single successful probe proves the entire failover chain works.
+    """
+    enabled: bool = False
+    source_interface: str = ""               # e.g. "enX4"
+    source_ip: str = ""                      # e.g. "192.168.12.250"
+    upstream_gateway: str = ""               # e.g. "192.168.12.251" (UDM VLAN gw)
+    table_id: int = 50
+    rule_priority: int = 90
+    targets: list[str] = field(default_factory=lambda: ["1.1.1.1", "8.8.8.8"])
+    interval_seconds: int = 30               # how often health daemon probes
+
+
+@dataclass
+class GatewaySwitcherConfig:
+    """Manual override of the failover gateway with safety net.
+
+    Once a switch is requested, a watchdog in the health daemon takes over:
+    if the requested switch hasn't been verified within verification_window
+    seconds, OR if the Flask process crashes mid-switch, the daemon
+    restores the previous gateway from the snapshot.
+    """
+    verification_window_seconds: int = 10    # active probing window
+    sample_interval_seconds: int = 2          # how often to probe in window
+    required_passing_samples: int = 2         # need this many OK samples to commit
+    auto_rollback: bool = True                # if verification fails, revert
+    watchdog_timeout_seconds: int = 30        # if no result by then, force revert
+
+
+@dataclass
 class RouterConfig:
     """Complete router configuration."""
     version: int
@@ -126,6 +164,8 @@ class RouterConfig:
     wans: dict[str, WanConfig]             # keyed by WAN id
     failover: FailoverConfig = field(default_factory=FailoverConfig)
     udm: UdmConfig = field(default_factory=UdmConfig)
+    e2e_probe: E2eProbeConfig = field(default_factory=E2eProbeConfig)
+    gateway_switcher: GatewaySwitcherConfig = field(default_factory=GatewaySwitcherConfig)
 
     def get_wan(self, wan_id: str) -> Optional[WanConfig]:
         return self.wans.get(wan_id)

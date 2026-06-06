@@ -3,8 +3,8 @@ import json
 import os
 import sqlite3
 
-from flask import Blueprint, render_template, request, redirect, url_for, flash
-from awesome_router import config as cfg, discovery
+from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify
+from awesome_router import config as cfg, discovery, probe as probe_mod, switcher
 from awesome_router.models import FailoverConfig, HealthConfig
 
 bp = Blueprint("failover", __name__)
@@ -41,6 +41,12 @@ def index():
     router_cfg = cfg.load()
     state = _load_health_state()
     events = _recent_events()
+    # Surface manual override info from intent file too
+    intent = probe_mod.read_intent() or {}
+    if state is None:
+        state = {}
+    state["manual_override_wan"] = intent.get("target_wan")
+    state["manual_override_phase"] = intent.get("phase", "")
     return render_template("failover.html",
                            cfg=router_cfg,
                            state=state,
@@ -96,6 +102,57 @@ def edit():
     cfg.save(router_cfg)
     flash("Failover settings saved. Click Apply to activate.", "success")
     return redirect(url_for("failover.index"))
+
+
+@bp.route("/switch", methods=["POST"])
+def switch():
+    """Switch the failover IP route to a specific WAN, with verification."""
+    target_wan = request.form.get("target_wan", "").strip()
+    skip_verification = "skip_verification" in request.form
+    if not target_wan:
+        flash("Pick a WAN to switch to.", "error")
+        return redirect(url_for("failover.index"))
+
+    result = switcher.switch_failover_to(target_wan, skip_verification=skip_verification)
+
+    if result["ok"]:
+        flash(result["message"], "success")
+    else:
+        category = "warning" if result.get("phase") == "rolled_back" else "error"
+        flash(result["message"], category)
+    return redirect(url_for("failover.index"))
+
+
+@bp.route("/release-override", methods=["POST"])
+def release_override():
+    """Clear the manual override and return to auto-priority mode."""
+    result = switcher.release_override()
+    flash(result["message"], "success" if result["ok"] else "error")
+    return redirect(url_for("failover.index"))
+
+
+@bp.route("/e2e-probe-now", methods=["POST"])
+def e2e_probe_now():
+    """Run a single end-to-end probe right now and return the result."""
+    router_cfg = cfg.load()
+    if not router_cfg.e2e_probe.enabled:
+        return jsonify({"ok": False, "error": "e2e probe not enabled"}), 400
+    result = probe_mod.run_probe(router_cfg.e2e_probe)
+    return jsonify({
+        "ok": result.ok,
+        "reason": result.reason,
+        "samples_attempted": result.samples_attempted,
+        "samples_passed": result.samples_passed,
+        "targets": {t: {"ok": ok, "rtt_ms": rtt}
+                     for t, (ok, rtt) in result.target_results.items()},
+    })
+
+
+@bp.route("/api/switch-status")
+def switch_status():
+    """Return current manual-override intent (for the GUI)."""
+    intent = probe_mod.read_intent() or {}
+    return jsonify(intent)
 
 
 @bp.route("/reorder", methods=["POST"])

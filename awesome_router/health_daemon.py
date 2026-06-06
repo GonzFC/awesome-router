@@ -22,6 +22,7 @@ from datetime import datetime
 from typing import Optional
 
 from . import config as cfg
+from . import probe as probe_mod
 from .models import RouterConfig, WanConfig
 from .udm_client import (
     UdmClient, UdmError, UdmUnauthorized, UdmUnreachable, UdmStats,
@@ -56,6 +57,18 @@ class WanHealth:
 
 
 @dataclass
+class E2eState:
+    """Latest end-to-end probe result + history."""
+    enabled: bool = False
+    last_ok: bool = False
+    last_attempted_at: int = 0
+    last_ok_at: int = 0
+    consecutive_failures: int = 0
+    last_rtt_ms: Optional[float] = None    # RTT of fastest target in last probe
+    last_reason: str = ""
+
+
+@dataclass
 class UdmState:
     """Latest UDM observation + verification state."""
     reachable: bool = False
@@ -81,6 +94,10 @@ class FailoverState:
     wans: dict[str, WanHealth] = field(default_factory=dict)
     last_update: int = 0
     udm: UdmState = field(default_factory=UdmState)
+    e2e: E2eState = field(default_factory=E2eState)
+    # Manual override info (read from /run/awesome-router/switch-intent.json)
+    manual_override_wan: Optional[str] = None
+    manual_override_phase: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -259,6 +276,17 @@ def save_state(state: FailoverState):
             "last_action": u.last_action,
             "last_action_at": u.last_action_at,
         },
+        "e2e": {
+            "enabled": state.e2e.enabled,
+            "last_ok": state.e2e.last_ok,
+            "last_attempted_at": state.e2e.last_attempted_at,
+            "last_ok_at": state.e2e.last_ok_at,
+            "consecutive_failures": state.e2e.consecutive_failures,
+            "last_rtt_ms": state.e2e.last_rtt_ms,
+            "last_reason": state.e2e.last_reason,
+        },
+        "manual_override_wan": state.manual_override_wan,
+        "manual_override_phase": state.manual_override_phase,
     }
     tmp = STATE_FILE + ".tmp"
     with open(tmp, "w") as f:
@@ -290,7 +318,15 @@ def log_event(message: str):
 # ---------------------------------------------------------------------------
 
 def choose_active(config: RouterConfig, state: FailoverState) -> Optional[str]:
-    """Pick the highest-priority healthy WAN from the priority list."""
+    """Pick the highest-priority healthy WAN from the priority list.
+
+    Honors a committed manual override: while the override is in effect,
+    don't auto-switch even if a higher-priority WAN comes back. The override
+    is cleared by the user via the GUI ("Release override" button).
+    """
+    intent = probe_mod.read_intent()
+    if intent and intent.get("phase") == "committed":
+        return intent.get("target_wan")
     for wan_id in config.failover.priority:
         h = state.wans.get(wan_id)
         if h and h.is_up:
@@ -678,18 +714,99 @@ class HealthDaemon:
         # Choose active WAN and apply failover if enabled
         if apply_failover and f.enabled and f.failover_ip:
             new_active = choose_active(self.config, self.state)
-            if new_active and new_active != self.state.active_wan:
-                old = self.state.active_wan
-                if update_failover_route(self.config, new_active):
-                    log_event(f"Failover: {old or '(none)'} -> {new_active}")
-                    self.state.active_wan = new_active
-            elif new_active:
+            if new_active:
+                if new_active != self.state.active_wan:
+                    old = self.state.active_wan
+                    changed = update_failover_route(self.config, new_active)
+                    if changed:
+                        log_event(f"Failover: {old or '(none)'} -> {new_active}")
+                # Always reflect the chosen WAN in state, even if the route
+                # was already correct (update_failover_route returns False then).
                 self.state.active_wan = new_active
 
         # Poll UDM after we know our own state — verification compares them
         self._poll_udm(now)
 
+        # Watchdog: catch crashed switcher processes
+        self._switch_watchdog(now)
+
+        # End-to-end probe (independent of UDM check)
+        self._tick_e2e_probe(now)
+
+        # Pick up manual override state for save_state
+        intent = probe_mod.read_intent()
+        if intent:
+            self.state.manual_override_wan = intent.get("target_wan")
+            self.state.manual_override_phase = intent.get("phase", "")
+        else:
+            self.state.manual_override_wan = None
+            self.state.manual_override_phase = ""
+
         save_state(self.state)
+
+    # ──────── watchdog ────────
+    def _switch_watchdog(self, now: int):
+        """If a switch intent has a deadline that passed without completing,
+        revert to the snapshot. This catches crashed Flask workers.
+        """
+        intent = probe_mod.read_intent()
+        if not intent:
+            return
+        phase = intent.get("phase", "")
+        if phase not in ("switching", "verifying"):
+            return
+        deadline = int(intent.get("deadline", 0))
+        if now < deadline:
+            return
+
+        # Deadline passed — force revert
+        snap = intent.get("snapshot_route") or {}
+        target = intent.get("target_wan", "(unknown)")
+        prev = intent.get("previous_wan", "(unknown)")
+        if snap.get("via") and snap.get("dev"):
+            ok = probe_mod.set_failover_route(
+                self.config.failover.table_id if self.config else 1000,
+                snap["via"], snap["dev"],
+            )
+            log_event(
+                f"WATCHDOG: switch to {target} took >= {deadline - int(intent.get('started_at', deadline))}s "
+                f"without completing — reverted to {prev} via {snap['via']}/{snap['dev']} (success={ok})"
+            )
+        else:
+            log_event(f"WATCHDOG: switch to {target} stalled but no snapshot to revert to")
+        # Clear intent — back to auto mode
+        probe_mod.clear_intent()
+        if self.config and self.config.failover.failover_ip:
+            probe_mod.flush_conntrack(self.config.failover.failover_ip)
+
+    # ──────── e2e probe ────────
+    def _tick_e2e_probe(self, now: int):
+        if not self.config:
+            return
+        e = self.config.e2e_probe
+        self.state.e2e.enabled = e.enabled
+        if not e.enabled:
+            return
+        # Honor configured interval
+        if (self.state.e2e.last_attempted_at
+            and now - self.state.e2e.last_attempted_at < e.interval_seconds):
+            return
+        self.state.e2e.last_attempted_at = now
+        result = probe_mod.run_probe(e)
+        self.state.e2e.last_ok = result.ok
+        # Record fastest RTT among successful targets
+        rtts = [rtt for ok, rtt in result.target_results.values() if ok and rtt is not None]
+        self.state.e2e.last_rtt_ms = min(rtts) if rtts else None
+        self.state.e2e.last_reason = result.reason
+        if result.ok:
+            self.state.e2e.last_ok_at = now
+            if self.state.e2e.consecutive_failures > 0:
+                log_event(f"E2E probe recovered after {self.state.e2e.consecutive_failures} failures")
+            self.state.e2e.consecutive_failures = 0
+        else:
+            self.state.e2e.consecutive_failures += 1
+            if self.state.e2e.consecutive_failures in (1, 3, 10):
+                log_event(f"E2E probe failed ({self.state.e2e.consecutive_failures}x): {result.reason}")
 
 
 # ---------------------------------------------------------------------------

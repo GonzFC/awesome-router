@@ -52,6 +52,91 @@
     </div>
   </div>
 
+  <!-- Manual gateway switcher -->
+  <div class="bg-surface-light rounded-xl border border-gray-700/50 p-5 mb-4">
+    <div class="flex items-center justify-between mb-3">
+      <h3 class="font-semibold text-white">Manual Override</h3>
+      {% if state and state.manual_override_phase %}
+      <span class="text-xs px-2 py-0.5 rounded-full bg-yellow-900/40 text-yellow-300 border border-yellow-700/40">
+        OVERRIDE ACTIVE — pinned to {{ state.manual_override_wan }}
+      </span>
+      {% else %}
+      <span class="text-xs px-2 py-0.5 rounded-full bg-emerald-900/40 text-emerald-300 border border-emerald-700/40">
+        AUTO MODE
+      </span>
+      {% endif %}
+    </div>
+    <p class="text-xs text-gray-500 mb-4">
+      Force the failover IP to use a specific WAN. The switch is verified with end-to-end probes;
+      if verification fails, the route auto-rolls-back to the previous gateway. The health daemon
+      acts as a crash watchdog — if the verification process dies mid-switch, it reverts after
+      {{ cfg.gateway_switcher.watchdog_timeout_seconds }}s.
+    </p>
+
+    <form method="post" action="/failover/switch"
+      onsubmit="return confirm('Switch the failover IP to the selected WAN?\n\nExisting connections through the current WAN may briefly reset. A verification + auto-rollback will protect you if the new path is broken.');"
+      class="flex gap-2 items-center">
+      <select name="target_wan" required
+        class="bg-surface text-gray-200 text-sm rounded-lg px-3 py-2 border border-gray-700 focus:border-accent outline-none">
+        {% for wan_id in cfg.failover.priority %}
+        {% set wan = cfg.get_wan(wan_id) %}
+        {% if wan %}
+        <option value="{{ wan_id }}" {{ 'selected' if state and state.active_wan == wan_id }}>
+          {{ wan.name }} ({{ wan.interface }}){{ ' — current' if state and state.active_wan == wan_id else '' }}
+        </option>
+        {% endif %}
+        {% endfor %}
+      </select>
+      <button type="submit"
+        class="bg-accent hover:bg-accent/80 text-white text-sm px-4 py-2 rounded-lg transition font-medium">
+        Switch + Verify
+      </button>
+      <label class="flex items-center gap-1.5 text-xs text-gray-500 ml-2 cursor-pointer">
+        <input type="checkbox" name="skip_verification"
+          class="rounded border-gray-600 bg-surface text-yellow-500 focus:ring-yellow-500">
+        Force (no verification)
+      </label>
+    </form>
+
+    {% if state and state.manual_override_phase == 'committed' %}
+    <form method="post" action="/failover/release-override" class="mt-3">
+      <button type="submit"
+        class="text-xs bg-yellow-900/40 hover:bg-yellow-800/60 text-yellow-300 border border-yellow-700/40 px-3 py-1.5 rounded-lg transition">
+        Release Override (return to auto-priority)
+      </button>
+    </form>
+    {% endif %}
+
+    <!-- E2E probe live status -->
+    {% if cfg.e2e_probe.enabled and state and state.e2e %}
+    <div class="mt-4 pt-4 border-t border-gray-700/40">
+      <div class="flex items-center justify-between text-sm">
+        <span class="text-gray-400">End-to-end probe</span>
+        <span class="flex items-center gap-2">
+          <span class="w-2 h-2 rounded-full {{ 'bg-emerald-400' if state.e2e.last_ok else 'bg-red-400' }}"></span>
+          <span class="{{ 'text-emerald-400' if state.e2e.last_ok else 'text-red-400' }}">
+            {{ 'OK' if state.e2e.last_ok else 'FAIL' }}
+          </span>
+          {% if state.e2e.last_rtt_ms %}
+          <span class="text-gray-500 font-mono text-xs">{{ "%.1f"|format(state.e2e.last_rtt_ms) }}ms</span>
+          {% endif %}
+          <button type="button" onclick="runProbeNow()"
+            class="text-xs text-accent-light hover:text-white transition ml-2">
+            Test now →
+          </button>
+        </span>
+      </div>
+      <p class="text-xs text-gray-600 mt-1">
+        Path: AR {{ cfg.e2e_probe.source_interface }} → UDM VLAN → UDM WAN → AR enX0 → failover → Internet
+        {% if state.e2e.consecutive_failures > 0 %}
+        <span class="text-red-400">({{ state.e2e.consecutive_failures }} consecutive failures)</span>
+        {% endif %}
+      </p>
+      <div id="probe-result" class="mt-2 text-xs"></div>
+    </div>
+    {% endif %}
+  </div>
+
   <!-- Priority + health per WAN -->
   <div class="bg-surface-light rounded-xl border border-gray-700/50 p-5 mb-4">
     <h3 class="font-semibold text-white mb-4">Priority & Health</h3>
@@ -229,6 +314,26 @@ async function refreshUdm() {
 
 refreshUdm();
 setInterval(refreshUdm, 5000);
+
+// ───────── E2E probe "Test now" button ─────────
+async function runProbeNow() {
+  const out = document.getElementById('probe-result');
+  if (!out) return;
+  out.innerHTML = '<span class="text-gray-500">Probing...</span>';
+  try {
+    const resp = await fetch('/failover/e2e-probe-now', { method: 'POST' });
+    const d = await resp.json();
+    if (d.ok) {
+      const lines = Object.entries(d.targets || {}).map(([t, r]) =>
+        `<span class="font-mono">${t}</span>: ${r.ok ? `<span class="text-emerald-400">OK ${(r.rtt_ms||0).toFixed(1)}ms</span>` : '<span class="text-red-400">FAIL</span>'}`);
+      out.innerHTML = `<div class="text-emerald-400">✓ Probe passed</div><div class="mt-1 text-gray-400 space-x-3">${lines.join(' · ')}</div>`;
+    } else {
+      out.innerHTML = `<span class="text-red-400">✗ ${d.reason || d.error || 'probe failed'}</span>`;
+    }
+  } catch (e) {
+    out.innerHTML = `<span class="text-red-400">${e.message}</span>`;
+  }
+}
 
 // ───────── Auto-refresh whole page periodically for events list ─────────
 {% if cfg.failover.enabled %}
