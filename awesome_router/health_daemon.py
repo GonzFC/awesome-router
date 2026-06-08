@@ -524,30 +524,60 @@ class HealthDaemon:
             wh = self.state.wans.get(self.state.active_wan)
             ar_thinks_ok = bool(wh and wh.is_up)
 
-        # UDM signals trouble if:
-        #   - state != ONLINE  (UDM controller marks it offline), OR
-        #   - uplink_rx_bps == 0 AND uplink_tx_bps == 0 AND AR thinks healthy
-        #     for one poll cycle. Idle networks can be 0 bps, so a single
-        #     zero-tick alone isn't enough — we accumulate across cycles.
-        udm_silent = (u.uplink_tx_bps == 0 and u.uplink_rx_bps == 0)
-        udm_offline = u.device_state and u.device_state != "ONLINE"
+        # ─── UDM state interpretation ──────────────────────────────────
+        # Several UDM states are transient (initialization, provisioning,
+        # firmware upgrade). Acting on them only INTERFERES with the UDM's
+        # own recovery. Only treat truly-offline / unreachable as actionable
+        # disagreement.
+        UDM_TRANSIENT_STATES = {
+            "GETTING_READY", "PROVISIONING", "UPGRADING",
+            "ADOPTING", "PENDING", "INSTALLING", "REBOOTING",
+        }
+        UDM_HEALTHY_STATES = {"ONLINE"}
 
-        if ar_thinks_ok and udm_offline:
+        udm_state = u.device_state or ""
+        is_transient = udm_state in UDM_TRANSIENT_STATES
+        is_healthy = udm_state in UDM_HEALTHY_STATES
+        is_offline = bool(udm_state) and not is_transient and not is_healthy
+
+        udm_silent = (u.uplink_tx_bps == 0 and u.uplink_rx_bps == 0)
+
+        if is_transient:
+            # UDM is busy initializing — leave it alone. Reset counter so we
+            # don't accumulate disagreements during a long boot.
+            if u.consecutive_disagreements > 0:
+                log_event(f"UDM in transient state {udm_state}; pausing verification "
+                            f"(reset {u.consecutive_disagreements} -> 0)")
+            u.consecutive_disagreements = 0
+            return  # no action while transient
+
+        if ar_thinks_ok and is_offline:
             u.consecutive_disagreements += 1
-            log_event(f"UDM disagrees: AR says active WAN OK, UDM state={u.device_state} (count {u.consecutive_disagreements})")
-        elif ar_thinks_ok and udm_silent and u.reachable:
-            # Silent + AR healthy could be idle. Count once and let the
-            # threshold decide. Heartbeat freshness is a sanity check.
+            log_event(f"UDM disagrees: AR says active WAN OK, UDM state={udm_state} (count {u.consecutive_disagreements})")
+        elif ar_thinks_ok and udm_silent and u.reachable and is_healthy:
+            # Silent + AR healthy + UDM ONLINE — could be idle. Count.
             u.consecutive_disagreements += 1
         else:
             if u.consecutive_disagreements > 0:
                 log_event(f"UDM agrees again (reset {u.consecutive_disagreements} -> 0)")
             u.consecutive_disagreements = 0
 
-        # Trigger corrective action if threshold crossed
+        # Trigger corrective action if threshold crossed AND cooldown elapsed.
+        # Cooldown prevents the AR from hammering an already-stressed UDM:
+        # at most one corrective action every 5 minutes.
+        CORRECTIVE_ACTION_COOLDOWN_SECS = 300
         threshold = self.config.udm.disagreement_threshold
         if u.consecutive_disagreements >= threshold:
-            self._take_corrective_action(now)
+            elapsed_since_last_action = now - u.last_action_at
+            if u.last_action_at == 0 or elapsed_since_last_action >= CORRECTIVE_ACTION_COOLDOWN_SECS:
+                self._take_corrective_action(now)
+            else:
+                # In cooldown — keep observing, don't act
+                wait_secs = CORRECTIVE_ACTION_COOLDOWN_SECS - elapsed_since_last_action
+                if u.consecutive_disagreements == threshold:
+                    # log once at the threshold crossing, not every tick
+                    log_event(f"Corrective action gated by cooldown; "
+                                f"{wait_secs}s until next eligible (last={u.last_action})")
 
     def _take_corrective_action(self, now: int):
         """Escalating ladder of corrective actions when AR/UDM disagree."""
