@@ -33,6 +33,9 @@ STATE_FILE = f"{STATE_DIR}/health.json"
 EVENT_LOG = "/var/lib/awesome-router/failover-events.log"
 DB_PATH = "/var/lib/awesome-router-monitor.db"
 
+# Retention for UDM stats samples (days)
+UDM_STATS_RETENTION_DAYS = 60
+
 
 # ---------------------------------------------------------------------------
 # State
@@ -294,6 +297,42 @@ def save_state(state: FailoverState):
     os.replace(tmp, STATE_FILE)
 
 
+def _ensure_udm_stats_table(con):
+    con.execute("""CREATE TABLE IF NOT EXISTS udm_stats(
+        ts INTEGER NOT NULL,
+        mem_pct REAL,
+        cpu_pct REAL,
+        load_1 REAL,
+        uplink_tx_bps INTEGER,
+        uplink_rx_bps INTEGER,
+        uptime_sec INTEGER,
+        state TEXT
+    )""")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_udm_ts ON udm_stats(ts)")
+
+
+def _persist_udm_sample(now: int, stats, device_state: str):
+    """Write one UDM stats sample to SQLite, prune old data."""
+    try:
+        con = sqlite3.connect(DB_PATH, timeout=2.0)
+        _ensure_udm_stats_table(con)
+        con.execute(
+            "INSERT INTO udm_stats(ts, mem_pct, cpu_pct, load_1, "
+            "uplink_tx_bps, uplink_rx_bps, uptime_sec, state) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (now, stats.mem_pct, stats.cpu_pct, stats.load_1,
+             stats.uplink_tx_bps, stats.uplink_rx_bps,
+             stats.uptime_sec, device_state),
+        )
+        # Retention: prune older than UDM_STATS_RETENTION_DAYS
+        cutoff = now - UDM_STATS_RETENTION_DAYS * 24 * 3600
+        con.execute("DELETE FROM udm_stats WHERE ts < ?", (cutoff,))
+        con.commit()
+        con.close()
+    except Exception as e:
+        print(f"[health] udm sample persist error: {e}", flush=True)
+
+
 def log_event(message: str):
     _ensure_state_dir()
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -503,6 +542,12 @@ class HealthDaemon:
             u.uplink_tx_bps = stats.uplink_tx_bps
             u.uplink_rx_bps = stats.uplink_rx_bps
             u.last_polled = now
+
+            # Persist this sample (memory %, CPU, uptime, etc.) to SQLite
+            # for trend graphs and restart detection.
+            _persist_udm_sample(now, stats, u.device_state)
+            # Detect UDM restarts (uptime jumped backwards)
+            self._detect_udm_restart(now, stats.uptime_sec)
         except UdmUnauthorized as e:
             u.reachable = False
             u.error = f"unauthorized: {e}"
@@ -578,6 +623,37 @@ class HealthDaemon:
                     # log once at the threshold crossing, not every tick
                     log_event(f"Corrective action gated by cooldown; "
                                 f"{wait_secs}s until next eligible (last={u.last_action})")
+
+    def _detect_udm_restart(self, now: int, uptime_sec: int):
+        """If the UDM's reported uptime jumped backwards, it restarted.
+
+        Logs a restart event with a timestamp + cause-hint based on previous
+        memory pressure. Useful for tracking whether our recent fixes have
+        actually reduced the restart cadence.
+        """
+        last_uptime = getattr(self, "_last_udm_uptime", None)
+        if last_uptime is not None and uptime_sec is not None:
+            # Threshold: uptime must drop AND new uptime is small (fresh boot)
+            if uptime_sec < last_uptime and uptime_sec < 3600:
+                # Look up the last memory % before the restart for context
+                hint = ""
+                try:
+                    con = sqlite3.connect(DB_PATH, timeout=2.0)
+                    _ensure_udm_stats_table(con)
+                    cur = con.execute(
+                        "SELECT mem_pct, ts FROM udm_stats "
+                        "WHERE ts < ? AND mem_pct IS NOT NULL "
+                        "ORDER BY ts DESC LIMIT 1",
+                        (now - uptime_sec,),
+                    )
+                    row = cur.fetchone()
+                    con.close()
+                    if row and row[0] is not None:
+                        hint = f" (last memory before restart: {row[0]:.1f}%)"
+                except Exception:
+                    pass
+                log_event(f"UDM restart detected (new uptime {uptime_sec}s){hint}")
+        self._last_udm_uptime = uptime_sec
 
     def _take_corrective_action(self, now: int):
         """Escalating ladder of corrective actions when AR/UDM disagree."""

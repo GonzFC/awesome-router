@@ -81,6 +81,88 @@ def health():
         return jsonify({"active_wan": None, "wans": {}, "last_update": 0})
 
 
+@bp.route("/udm/history")
+def udm_history():
+    """Time-series UDM stats for trend graphs.
+
+    Query params:
+      window: "24h" (default), "7d", "30d", "60d"
+    """
+    window = request.args.get("window", "24h")
+    if window == "7d":
+        window_secs = 7 * 86400
+        bucket_secs = 1800           # 30 min
+    elif window == "30d":
+        window_secs = 30 * 86400
+        bucket_secs = 7200           # 2 hours
+    elif window == "60d":
+        window_secs = 60 * 86400
+        bucket_secs = 14400          # 4 hours
+    else:
+        window_secs = 86400
+        bucket_secs = 300            # 5 min
+
+    try:
+        con = sqlite3.connect(DB_PATH)
+        now = int(time.time())
+        start = now - window_secs
+        rows = list(con.execute(
+            "SELECT ts, mem_pct, cpu_pct, load_1, uplink_tx_bps, "
+            "       uplink_rx_bps, uptime_sec, state "
+            "FROM udm_stats WHERE ts >= ? ORDER BY ts ASC",
+            (start,)
+        ))
+        con.close()
+    except Exception:
+        return jsonify({"window": window, "samples": [], "restarts": []})
+
+    # Bucket and reduce
+    buckets: dict[int, list] = {}
+    restarts = []        # list of (ts, uptime_after_restart_sec)
+    last_uptime = None
+    for row in rows:
+        ts, mem, cpu, load1, tx, rx, uptime, state = row
+        bucket = ts - (ts % bucket_secs)
+        buckets.setdefault(bucket, []).append({
+            "mem_pct": mem, "cpu_pct": cpu, "load_1": load1,
+            "uplink_tx_bps": tx, "uplink_rx_bps": rx,
+            "uptime_sec": uptime, "state": state,
+        })
+        # Restart detection: uptime jumped backwards
+        if last_uptime is not None and uptime is not None:
+            if uptime < last_uptime and uptime < 3600:
+                restarts.append({"ts": ts, "uptime_after": uptime})
+        last_uptime = uptime
+
+    samples = []
+    for b in sorted(buckets.keys()):
+        items = buckets[b]
+        # Take mean for percentages and rates
+        def mean(field):
+            vals = [i[field] for i in items if i.get(field) is not None]
+            return round(sum(vals) / len(vals), 2) if vals else None
+        # State: most common in bucket
+        states = [i["state"] for i in items if i.get("state")]
+        state_mode = max(set(states), key=states.count) if states else ""
+        samples.append({
+            "t": b,
+            "mem_pct": mean("mem_pct"),
+            "cpu_pct": mean("cpu_pct"),
+            "load_1": mean("load_1"),
+            "uplink_tx_bps": mean("uplink_tx_bps"),
+            "uplink_rx_bps": mean("uplink_rx_bps"),
+            "state": state_mode,
+        })
+
+    return jsonify({
+        "window": window,
+        "bucket_seconds": bucket_secs,
+        "samples": samples,
+        "restarts": restarts,
+        "total_samples": len(rows),
+    })
+
+
 @bp.route("/routes")
 def routes():
     router_cfg = cfg.load()

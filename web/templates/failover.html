@@ -199,6 +199,22 @@
     </div>
   </div>
 
+  <!-- UDM Trends (memory, CPU, restarts) -->
+  <div class="bg-surface-light rounded-xl border border-gray-700/50 p-5 mb-4">
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="font-semibold text-white">UDM Health History</h3>
+      <div class="flex gap-1 bg-surface rounded-lg p-0.5">
+        <button onclick="loadUdmHistory('24h')" id="udm-btn-24h" class="udm-tab text-xs px-3 py-1 rounded-md transition bg-accent/20 text-accent-light">24h</button>
+        <button onclick="loadUdmHistory('7d')" id="udm-btn-7d" class="udm-tab text-xs px-3 py-1 rounded-md transition text-gray-500 hover:text-gray-300">7d</button>
+        <button onclick="loadUdmHistory('30d')" id="udm-btn-30d" class="udm-tab text-xs px-3 py-1 rounded-md transition text-gray-500 hover:text-gray-300">30d</button>
+        <button onclick="loadUdmHistory('60d')" id="udm-btn-60d" class="udm-tab text-xs px-3 py-1 rounded-md transition text-gray-500 hover:text-gray-300">60d</button>
+      </div>
+    </div>
+    <div id="udm-summary" class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4 text-sm"></div>
+    <div style="height:200px; position:relative;"><canvas id="udm-mem-chart"></canvas></div>
+    <div id="udm-restarts" class="mt-3 text-xs text-gray-500"></div>
+  </div>
+
   <!-- Recent events -->
   <div class="bg-surface-light rounded-xl border border-gray-700/50 p-5">
     <h3 class="font-semibold text-white mb-3">Recent Events</h3>
@@ -221,6 +237,8 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
 <script>
 // ───────── UDM status card (fetched separately so it can update fast) ─────────
 
@@ -314,6 +332,102 @@ async function refreshUdm() {
 
 refreshUdm();
 setInterval(refreshUdm, 5000);
+
+// ───────── UDM history chart (memory % over time + restart markers) ─────────
+let udmMemChart = null;
+async function loadUdmHistory(window) {
+  document.querySelectorAll('.udm-tab').forEach(b => {
+    b.className = 'udm-tab text-xs px-3 py-1 rounded-md transition text-gray-500 hover:text-gray-300';
+  });
+  document.getElementById('udm-btn-' + window).className =
+    'udm-tab text-xs px-3 py-1 rounded-md transition bg-accent/20 text-accent-light';
+
+  try {
+    const resp = await fetch(`/api/udm/history?window=${window}`);
+    if (!resp.ok) return;
+    const d = await resp.json();
+    const samples = d.samples || [];
+    const restarts = d.restarts || [];
+
+    // Summary metrics
+    const memVals = samples.filter(s => s.mem_pct !== null).map(s => s.mem_pct);
+    const summary = document.getElementById('udm-summary');
+    if (samples.length === 0) {
+      summary.innerHTML = '<div class="col-span-4 text-gray-500">No UDM data yet — wait for the daemon to start sampling.</div>';
+    } else {
+      const memPeak = Math.max(...memVals);
+      const memAvg = memVals.length ? (memVals.reduce((a,b)=>a+b,0)/memVals.length) : 0;
+      const memCurrent = memVals[memVals.length-1];
+      summary.innerHTML = `
+        <div><div class="text-xs text-gray-500">Memory now</div><div class="${memCurrent>85?'text-red-400':memCurrent>70?'text-yellow-400':'text-emerald-400'} text-lg font-mono">${memCurrent?.toFixed(1)}%</div></div>
+        <div><div class="text-xs text-gray-500">Memory peak (window)</div><div class="${memPeak>90?'text-red-400':memPeak>80?'text-yellow-400':'text-gray-300'} text-lg font-mono">${memPeak.toFixed(1)}%</div></div>
+        <div><div class="text-xs text-gray-500">Memory avg (window)</div><div class="text-gray-300 text-lg font-mono">${memAvg.toFixed(1)}%</div></div>
+        <div><div class="text-xs text-gray-500">Restarts (window)</div><div class="${restarts.length>2?'text-red-400':restarts.length>0?'text-yellow-400':'text-emerald-400'} text-lg font-mono">${restarts.length}</div></div>
+      `;
+    }
+
+    // Restart list
+    const restartsEl = document.getElementById('udm-restarts');
+    if (restarts.length === 0) {
+      restartsEl.innerHTML = '<span class="text-emerald-400">No restarts detected in this window ✓</span>';
+    } else {
+      const lines = restarts.slice(-10).map(r =>
+        `<span class="font-mono text-yellow-300">${new Date(r.ts*1000).toLocaleString()}</span>`
+      ).join(' · ');
+      restartsEl.innerHTML = `Restarts: ${lines}`;
+    }
+
+    // Chart
+    const labels = samples.map(s => new Date(s.t * 1000));
+    const memData = samples.map(s => s.mem_pct);
+    const cpuData = samples.map(s => s.cpu_pct);
+
+    const ctx = document.getElementById('udm-mem-chart').getContext('2d');
+    if (udmMemChart) udmMemChart.destroy();
+    udmMemChart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          { label: 'Memory %', data: memData, borderColor: '#f87171', backgroundColor: 'rgba(248,113,113,0.15)', fill: true, tension: 0.3, borderWidth: 1.5, pointRadius: 0, pointHitRadius: 8, yAxisID: 'y' },
+          { label: 'CPU %', data: cpuData, borderColor: '#60a5fa', backgroundColor: 'rgba(96,165,250,0.10)', fill: false, tension: 0.3, borderWidth: 1.5, pointRadius: 0, pointHitRadius: 8, yAxisID: 'y' },
+        ],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { display: true, labels: { color: '#9ca3af', font: { size: 10 } } },
+          tooltip: { backgroundColor: '#1e1e2e', borderColor: '#374151', borderWidth: 1, titleColor: '#e5e7eb', bodyColor: '#9ca3af' },
+          annotation: {
+            annotations: restarts.map((r, i) => ({
+              type: 'line',
+              xMin: new Date(r.ts*1000),
+              xMax: new Date(r.ts*1000),
+              borderColor: '#fbbf24',
+              borderWidth: 2,
+              borderDash: [4, 4],
+              label: { content: 'restart', display: true, position: 'start', color: '#fbbf24', backgroundColor: 'rgba(0,0,0,0.4)', font: { size: 9 } }
+            })),
+          }
+        },
+        scales: {
+          x: { type: 'time', time: { tooltipFormat: window==='24h' ? 'HH:mm' : 'MMM d HH:mm', displayFormats: { minute: 'HH:mm', hour: 'HH:mm', day: 'MMM d' } }, grid: { color: 'rgba(75,85,99,0.2)' }, ticks: { color: '#6b7280', maxTicksLimit: 12, font: { size: 10 } } },
+          y: { beginAtZero: true, max: 100, grid: { color: 'rgba(75,85,99,0.2)' }, ticks: { color: '#6b7280', font: { size: 10 }, callback: v => v + '%' } }
+        }
+      }
+    });
+  } catch (e) {
+    console.error('udm history error', e);
+  }
+}
+
+// Initial load (after chart.js is ready)
+if (typeof Chart !== 'undefined') {
+  loadUdmHistory('24h');
+} else {
+  setTimeout(() => loadUdmHistory('24h'), 500);
+}
 
 // ───────── E2E probe "Test now" button ─────────
 async function runProbeNow() {
